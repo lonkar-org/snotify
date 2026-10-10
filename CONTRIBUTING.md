@@ -75,6 +75,9 @@ Ideas that are parked, not promised. Open an issue if you want one of them.
   without replacing them and groups them in the history. A parent id per
   post was looked at and dropped since shell scripts won't carry one.
 - Linux, then the history across devices.
+- The sneeze, the default sound that counts a burst: `docs/sneeze.md` has
+  the decided design, the mechanism ships first on cut system sounds and the
+  synthesised voice comes after.
 
 ## Licence
 
