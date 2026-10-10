@@ -47,6 +47,42 @@ that posts every two seconds for a minute: without it that's one burst
 going round the sequence fifteen times and with it the count starts again
 every twenty seconds.
 
+## The durations, and why
+
+Researched on 2026-10-10, the sources in the links.
+
+- **Window, 3 s.** The best-supported number. Pöppel's integration window
+  puts the "subjective present" at 2 to 3 s and at a 5 s gap two sounds no
+  longer join into one percept
+  ([Pöppel 2004](https://ane.pl/index.php/ane/article/download/1514/1514)).
+  The musical limit is stricter, past about 2 s a listener stops hearing a
+  beat ([London, Hearing in Time](https://academic.oup.com/book/9899)). So
+  3 s is the latest gap at which the next sound still reads as the same
+  thing continuing and it tolerates a script posting every 2 s with jitter.
+  Not above 3 s.
+- **Spacing, 500 ms between onsets.** Perception sets the floor far lower,
+  two clicks separate at a few ms and people count events accurately up to
+  8 per second, so the floor that matters is rhythm: beats are heard as one
+  figure down to about 100 ms apart. The one industry figure is Android's
+  limit of one alert sound per second per app, which drops the extra rather
+  than delaying it
+  ([Android 8.1 notes](https://developer.android.com/about/versions/oreo/android-8.1)).
+  500 ms keeps the tally a rhythm and lets a sound of 350 ms finish first.
+- **Burst limit, 20 s, a judgment call.** Nothing in the literature works
+  at this scale, batching research is in minutes and hours and game combos
+  reset on a miss, not a timer. Two weak anchors: Android's lowest toast
+  tier is 3 per 20 s and at 2 s spacing a cycle of four is 8 s, so 20 s is
+  about two and a half cycles.
+- **A caveat on counting.** Sequential sounds are subitised only up to two
+  ([Camos and Tillmann 2008](https://researchers.westernsydney.edu.au/en/publications/discontinuity-in-the-enumeration-of-sequentially-presented-audito/)),
+  the "four without counting" figure is for things seen at once. That's why
+  every step has its own pitch: the listener recognises the third sound by
+  how it sounds, not by having counted to three.
+- **Lengths.** The system sounds run 0.56 s (Tink) to 2.16 s with their
+  tails, Glass is 1.65 s, Slack's knock is 0.55 s, Apple's Tri-tone 0.9 s.
+  A tally in whole Glass would be slow, which is one more reason the cut
+  versions, `Glass@35`, make a better default than the whole sound.
+
 ## How it works
 
 The poster never picks. Each post:
@@ -86,7 +122,7 @@ voice is ours and not any studio's character so the repo never names one.
 ## Open
 
 <!-- @Yogesh(check): window = quiet that ends a burst, burst = longest one burst can run; is that the pair you meant by "duration of burst" and "duration of gap"? -->
-- The two durations and their defaults, 3 s and 20 s.
+- The names of the two durations.
 <!-- @Yogesh(decide): does a post with --group (a replacement) advance the tally, or play the step of the banner it replaced? -->
 - Replacements.
 - The history records the step with the entry (`sound: "sniffles/2"`) so a
