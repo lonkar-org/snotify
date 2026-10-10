@@ -32,6 +32,10 @@ test-app dir="dist":
     {{scripts}}/notify-app.sh build {{dir}}
     {{scripts}}/notify-app-test.sh {{dir}}/Notify.app
 
+# Fill the history with twenty demo notifications from four mocked senders, then `notify show`
+demo *args:
+    {{scripts}}/notify-demo.sh {{args}}
+
 # Re-vendor Resources/nerd-fonts from the pinned Nerd Fonts release (`VERSION` to move it)
 fetch-nerd-font version="":
     {{scripts}}/fetch-nerd-font.sh {{version}}

@@ -81,3 +81,5 @@ Homebrew cask; `just release X.Y.Z` cuts the next section from Unreleased.
 - The click brings forward the app LaunchServices stamped on the environment
   (`__CFBundleIdentifier`, `open -b`) when `TERM_PROGRAM` only says tmux, so
   the jump back works from inside tmux.
+- `just demo` (`scripts/notify-demo.sh`): twenty notifications from four
+  mocked senders, so the history window has something to show.
