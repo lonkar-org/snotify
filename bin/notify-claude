@@ -1,0 +1,338 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016  # backticks in printf formats are Markdown, not expansions
+# notify-claude - a Claude Code hook: notify through Notify.app when a turn ends,
+# for the sessions that asked.
+#
+# Usage, as Claude Code hooks (hooks/hooks.json when installed as the plugin,
+# or the same four entries in ~/.claude/settings.json by hand):
+#   notify-claude prompt   UserPromptSubmit: reads the hook's JSON on stdin; a
+#                          prompt that is `/notify` (or starts with it, with
+#                          `notify me`, or with the plugin's spelling
+#                          `/notification-companion:notify`) arms this session,
+#                          `/notify off` disarms
+#   notify-claude stop     Stop: reads the JSON; if the session is armed, posts
+#                          the notification and disarms
+#   notify-claude asked    Notification (permission_prompt, agent_needs_input,
+#                          elicitation) and PreToolUse AskUserQuestion: if the
+#                          session is armed, posts "Claude asks" and stays armed
+# and by hand, or from the /notify skill as a fallback:
+#   notify-claude arm [SESSION_ID] [TEXT]  arm (the id defaults to $CLAUDE_SESSION_ID)
+#   notify-claude disarm [SESSION_ID]
+#   notify-claude status                   list the armed sessions
+#
+# The text after /notify, if any, is the banner's own words: `body`,
+# `subject | body`, or `subject -` for your subject over Claude's message.
+# Without it the title is "Claude finished in <project>" and the body is the
+# first line of Claude's last message.
+#
+# Typed while Claude is working, /notify reaches the transcript as an attachment,
+# and the turn that ends next is the work: notify. Typed while Claude is idle, it
+# is a user message of its own, so the turn that ends next is the one that merely
+# acknowledged it: stay armed, the work comes with the next prompt. The Stop hook
+# tells the two apart by the last real user message in the transcript.
+#
+# The banner's click jumps the attached tmux client to the pane Claude ran in
+# (TMUX_PANE at arming time) and brings the terminal forward: the one
+# TERM_PROGRAM named when the session was armed (Ghostty, iTerm, Terminal,
+# WezTerm, kitty, VS Code), or NOTIFY_CLAUDE_TERMINAL, an app name for `open -a`.
+# Its Info button shows the last thing Claude said, in full, as Markdown.
+#
+# Needs jq, for the hook events and the transcript.
+set -euo pipefail
+
+self=${0##*/}
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+notify=$here/notify
+[[ -x $notify ]] || notify=$HOME/.local/bin/notify
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/notify/claude
+# Seconds. A /notify this soon after a Stop was queued behind that work, and a
+# queued /notify's banner waits this long for a further queued prompt to start.
+grace=${NOTIFY_CLAUDE_GRACE:-3}
+
+die() { printf '%s: error: %s\n' "$self" "$1" >&2; exit 1; }
+
+# Hooks hand their event as JSON on stdin; nothing else reads it.
+read_event() {
+  event=$(cat)
+  session=$(jq -r '.session_id // empty' <<<"$event")
+  [[ -n $session ]] || die "no session_id in the hook event"
+}
+
+flag() { printf '%s/%s' "$state_dir" "$1"; }
+
+# The app to bring forward on a click, as `open -a` wants it. Empty when the
+# terminal is not one of the known ones, and then the click only switches tmux.
+terminal_app() {
+  if [[ -n ${NOTIFY_CLAUDE_TERMINAL:-} ]]; then printf '%s' "$NOTIFY_CLAUDE_TERMINAL"; return; fi
+  case ${TERM_PROGRAM:-} in
+    ghostty) printf Ghostty ;;
+    iTerm.app) printf iTerm ;;
+    Apple_Terminal) printf Terminal ;;
+    WezTerm) printf WezTerm ;;
+    kitty) printf kitty ;;
+    vscode) printf 'Visual Studio Code' ;;
+    Alacritty|alacritty) printf Alacritty ;;
+    *) printf '' ;;
+  esac
+}
+
+# The shell command a click runs: switch the tmux client to the pane, then
+# bring the terminal forward. Either half may be missing.
+click_command() { # click_command PANE TERMINAL
+  local parts=()
+  [[ -n $1 ]] && parts+=("tmux switch-client -t '$1'")
+  [[ -n $2 ]] && parts+=("open -a '$2'")
+  local IFS=';'
+  printf '%s' "${parts[*]}"
+}
+
+# The text after /notify: `body`, `subject | body`, or `subject -`, where the
+# dash in the body's place says "Claude's own message". Either part may be
+# empty, and a missing part keeps its default on the banner.
+parse_custom() { # parse_custom TEXT -> custom_title, custom_body
+  local text=$1
+  custom_title="" custom_body=""
+  text=${text//$'\n'/ }
+  text=$(printf '%s' "$text" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  if [[ $text == *"|"* ]]; then
+    custom_title=${text%%|*}
+    custom_body=${text#*|}
+  elif [[ $text == *" -" ]]; then
+    custom_title=${text% -}
+  elif [[ $text == "-" ]]; then
+    custom_title=""
+  else
+    custom_body=$text
+  fi
+  custom_title=$(printf '%s' "$custom_title" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  custom_body=$(printf '%s' "$custom_body" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  [[ $custom_body != "-" ]] || custom_body=""
+}
+
+arm() { # arm SID [CWD] [TEXT] [PROMPT_ID]
+  local sid=${1:?session id}
+  parse_custom "${3:-}"
+  mkdir -p "$state_dir"
+  {
+    printf 'pane=%s\n' "${TMUX_PANE:-}"
+    printf 'terminal=%s\n' "$(terminal_app)"
+    printf 'cwd=%s\n' "${2:-$PWD}"
+    printf 'armed=%s\n' "$(date +%s)"
+    printf 'title=%s\n' "$custom_title"
+    printf 'body=%s\n' "$custom_body"
+    printf 'prompt_id=%s\n' "${4:-}"
+  } > "$(flag "$sid")"
+}
+
+disarm() { rm -f "$(flag "${1:?session id}")"; }
+
+# The last real prompt in the transcript: the text of a user entry, skipping tool
+# results (text-less arrays), the skill body an interactive session appends after
+# a slash command, and system reminders. First 200 characters.
+last_prompt() { # last_prompt TRANSCRIPT
+  jq -r -n '
+    [inputs | select(.type == "user") | .message.content
+      | if type == "string" then . else ([.[] | select(.type == "text") | .text] | join("\n")) end
+      | select(length > 0
+          and (startswith("<system-reminder>") | not)
+          and (startswith("Base directory for this skill") | not))
+    ] | last // "" | .[0:200]' "$1" 2>/dev/null || true
+}
+
+# The last text Claude wrote, as Markdown.
+last_reply() { # last_reply TRANSCRIPT
+  jq -r -n '
+    [inputs | select(.type == "assistant") | .message.content[]?
+      | select(.type == "text") | .text] | last // ""' "$1" 2>/dev/null || true
+}
+
+# The last text Claude wrote before the last /notify prompt: the reply of the
+# work a queued /notify was meant for, not the acknowledgement that followed.
+last_reply_before_notify() { # last_reply_before_notify TRANSCRIPT
+  jq -r -n '
+    [inputs] as $e
+    | ($e | map(select(.type == "user" and (.message.content | type) == "string"
+        and (.message.content | test("<command-name>/([a-z0-9-]+:)?notify</command-name>|^/([a-z0-9-]+:)?notify|^notify me")))) | last) as $n
+    | [$e[] | select(.type == "assistant" and ($n == null or .timestamp < $n.timestamp))
+        | .message.content[]? | select(.type == "text") | .text] | last // ""' "$1" 2>/dev/null || true
+}
+
+# Post the banner for an armed session and disarm it. REPLY is Claude's last
+# message; CWD is the fallback when the flag has none.
+post_banner() { # post_banner SID CWD REPLY
+  local sid=$1 cwd=$2 reply=$3 f pane terminal custom_title custom_body first project title body info click
+  f=$(flag "$sid")
+  [[ -f $f ]] || return 0
+  pane=$(awk -F= '$1=="pane" {print $2}' "$f")
+  terminal=$(sed -n 's/^terminal=//p' "$f" | head -1)
+  [[ -n $(awk -F= '$1=="cwd" {print $2}' "$f") ]] && cwd=$(awk -F= '$1=="cwd" {print $2}' "$f")
+  custom_title=$(sed -n 's/^title=//p' "$f" | head -1)
+  custom_body=$(sed -n 's/^body=//p' "$f" | head -1)
+  first=$(printf '%s\n' "$reply" | sed -e 's/^#* *//' -e 's/\*\*//g' | grep -m1 . || true)
+  [[ -n $first ]] || first="Finished."
+  project=${cwd##*/}
+  [[ -n $project ]] || project=Claude
+  title=${custom_title:-"Claude finished in $project"}
+  body=${custom_body:-${first:0:140}}
+  mkdir -p "$state_dir"
+  info=$state_dir/$sid.md
+  {
+    printf '# %s\n\n' "$title"
+    [[ -n $custom_body ]] && printf '%s\n\n' "$custom_body"
+    printf '%s\n\n' "$reply"
+    printf -- '- Directory: `%s`\n' "$cwd"
+    [[ -n $pane ]] && printf -- '- tmux pane: `%s`\n' "$pane"
+    printf -- '- Session: `%s`\n' "$sid"
+  } > "$info"
+  click=$(click_command "$pane" "$terminal")
+  disarm "$sid"
+  "$notify" --title "$title" --body "$body" --sound Glass \
+    --group "claude-$sid" ${click:+--on-click "$click"} --info-file "$info" >/dev/null 2>&1 || true
+}
+
+# How long ago the session's last turn ended; a large number when unknown.
+since_last_stop() { # since_last_stop SID
+  local f=$state_dir/$1.stop
+  [[ -f $f ]] || { printf '%s' 999999; return; }
+  printf '%s' $(( $(date +%s) - $(cat "$f") ))
+}
+
+case ${1:-} in
+  prompt)
+    read_event
+    prompt=$(jq -r '.prompt // ""' <<<"$event")
+    cwd=$(jq -r '.cwd // ""' <<<"$event")
+    pid=$(jq -r '.prompt_id // ""' <<<"$event")
+    transcript=$(jq -r '.transcript_path // ""' <<<"$event")
+    mkdir -p "$state_dir"
+    # Every prompt leaves its id: a Stop posts only when some prompt came after
+    # the /notify, whichever turn the Stop belongs to. A queued prompt can be
+    # injected into a running turn, so the Stop's own prompt_id cannot say.
+    printf '%s\n' "$pid" > "$state_dir/$session.last"
+    text=""
+    case $prompt in
+      # Installed as the plugin the skill is /notification-companion:notify, so
+      # any one-word prefix before the colon is accepted.
+      "/notify off"*|"notify me off"*|"/"*":notify off"*) disarm "$session"; exit 0 ;;
+      "/notify"|"/notify "*) text=${prompt#/notify} ;;
+      "notify me"|"notify me "*) text=${prompt#notify me} ;;
+      "/"*":notify"|"/"*":notify "*) text=${prompt#*:notify} ;;
+      *"<command-name>/notify</command-name>"*|*"<command-name>/"*":notify</command-name>"*)
+        # the expanded form carries the text in <command-args>
+        text=$(sed -n 's/.*<command-args>\(.*\)<\/command-args>.*/\1/p' <<<"$prompt" | head -1) ;;
+      *) exit 0 ;;
+    esac
+    arm "$session" "$cwd" "$text" "$pid"
+    # A /notify typed while Claude was busy is held until the turn ends and then
+    # runs as a turn of its own, seconds after the work it was meant for. Nobody
+    # types /notify three seconds after reading a result, so that gap means
+    # queued, and the Stop of this turn decides (see there).
+    if (( $(since_last_stop "$session") <= grace )); then
+      printf 'queued=1\n' >> "$(flag "$session")"
+    fi
+    ;;
+  stop)
+    read_event
+    mkdir -p "$state_dir"
+    date +%s > "$state_dir/$session.stop"
+    f=$(flag "$session")
+    [[ -f $f ]] || exit 0
+    transcript=$(jq -r '.transcript_path // ""' <<<"$event")
+    cwd=$(jq -r '.cwd // ""' <<<"$event")
+    armed_pid=$(sed -n 's/^prompt_id=//p' "$f" | head -1)
+    last_pid=$(cat "$state_dir/$session.last" 2>/dev/null || true)
+    stop_pid=$(jq -r '.prompt_id // ""' <<<"$event")
+    # Three cases, by what came after the /notify:
+    # - another prompt (its id is the last seen, or this Stop belongs to a turn
+    #   the /notify was injected into): the work is done, post now;
+    # - nothing, and the /notify was queued behind work that just ended: post
+    #   after a grace period, unless a further queued prompt starts meanwhile,
+    #   in which case that prompt's Stop posts;
+    # - nothing, typed while idle: the arming turn, the work is still to come.
+    # Armed by hand there is no id, and the transcript's last real prompt decides.
+    if [[ -n $armed_pid ]]; then
+      if [[ $last_pid == "$armed_pid" && $stop_pid == "$armed_pid" ]]; then
+        if grep -q '^queued=1$' "$f"; then
+          reply=""
+          [[ -f $transcript ]] && reply=$(last_reply_before_notify "$transcript")
+          printf '%s' "$reply" > "$state_dir/$session.reply"
+          # detached, so Claude Code does not wait on it; stdio closed for the same reason
+          nohup "$0" later "$session" "$armed_pid" "$cwd" >/dev/null 2>&1 </dev/null &
+          disown 2>/dev/null || true
+        fi
+        exit 0
+      fi
+    elif [[ -f $transcript ]]; then
+      case $(last_prompt "$transcript") in
+        *"<command-name>/notify</command-name>"*|*"<command-name>/"*":notify</command-name>"*|"/notify"*|"/"*":notify"*|"notify me"*) exit 0 ;;
+      esac
+    fi
+    # The event carries the last message itself; the transcript can lag behind it
+    # (seen on a --resume'd turn on 2026-10-10), so it is only the fallback.
+    reply=$(jq -r '.last_assistant_message // ""' <<<"$event")
+    [[ -n $reply || ! -f $transcript ]] || reply=$(last_reply "$transcript")
+    post_banner "$session" "$cwd" "$reply"
+    ;;
+  later)
+    # The grace period of a queued /notify, run detached by the Stop hook: post
+    # unless a further prompt has started since, which leaves the banner to that
+    # prompt's own Stop.
+    sid=${2:?session id} armed_pid=${3:?prompt id} cwd=${4:-}
+    sleep "$grace"
+    reply=$(cat "$state_dir/$sid.reply" 2>/dev/null || true)
+    rm -f "$state_dir/$sid.reply"
+    [[ -f $(flag "$sid") ]] || exit 0
+    [[ $(cat "$state_dir/$sid.last" 2>/dev/null || true) == "$armed_pid" ]] || exit 0
+    post_banner "$sid" "$cwd" "$reply"
+    ;;
+  asked)
+    # Notification (permission_prompt, agent_needs_input, elicitation) and
+    # PreToolUse AskUserQuestion hooks: Claude stopped for a decision. An armed
+    # session gets a banner now and stays armed, so the finish still reports.
+    read_event
+    [[ -f $(flag "$session") ]] || exit 0
+    question=$(jq -r '
+      .message // (.tool_input.questions[0].question // "") // ""' <<<"$event")
+    [[ -n $question ]] || question="Claude is waiting for you."
+    cwd=$(jq -r '.cwd // ""' <<<"$event")
+    project=${cwd##*/}
+    [[ -n $project ]] || project=Claude
+    pane=$(awk -F= '$1=="pane" {print $2}' "$(flag "$session")")
+    terminal=$(sed -n 's/^terminal=//p' "$(flag "$session")" | head -1)
+    mkdir -p "$state_dir"
+    info=$state_dir/$session.asked.md
+    {
+      printf '# Claude asks in %s\n\n%s\n\n' "$project" "$question"
+      printf -- '- Directory: `%s`\n' "$cwd"
+      [[ -n $pane ]] && printf -- '- tmux pane: `%s`\n' "$pane"
+      printf -- '- Session: `%s`\n' "$session"
+    } > "$info"
+    click=$(click_command "$pane" "$terminal")
+    "$notify" --title "Claude asks in $project" --body "${question:0:140}" --sound Glass \
+      --group "claude-$session" ${click:+--on-click "$click"} --info-file "$info" >/dev/null 2>&1 || true
+    ;;
+  arm)
+    sid=${2:-${CLAUDE_SESSION_ID:-}}
+    [[ -n $sid ]] || die "no session id: pass one, or run from a Claude Code hook"
+    shift 2 2>/dev/null || shift $#
+    arm "$sid" "$PWD" "$*"
+    printf 'armed %s\n' "$sid"
+    ;;
+  disarm)
+    sid=${2:-${CLAUDE_SESSION_ID:-}}
+    [[ -n $sid ]] || die "no session id"
+    disarm "$sid"
+    printf 'disarmed %s\n' "$sid"
+    ;;
+  status)
+    shopt -s nullglob
+    for f in "$state_dir"/*; do
+      case $f in *.md|*.last|*.stop|*.reply) continue ;; esac
+      printf '%s  %s\n' "${f##*/}" "$(tr '\n' ' ' < "$f")"
+    done
+    ;;
+  *)
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2
+    exit 2
+    ;;
+esac

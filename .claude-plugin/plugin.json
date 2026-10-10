@@ -1,0 +1,18 @@
+{
+  "name": "notification-companion",
+  "description": "A desktop banner when Claude Code finishes or stops to ask: /notify arms the session, the click jumps to the tmux pane, Info shows the last message. Needs Notify.app from the same repository.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Yogesh Lonkar",
+    "email": "yogesh@lonkar.org"
+  },
+  "homepage": "https://github.com/lonkar-org/notification-companion",
+  "repository": "https://github.com/lonkar-org/notification-companion",
+  "license": "MIT",
+  "keywords": [
+    "notification",
+    "macos",
+    "hooks",
+    "tmux"
+  ]
+}

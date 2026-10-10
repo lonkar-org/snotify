@@ -1,0 +1,25 @@
+{
+  "name": "notification-companion",
+  "owner": {
+    "name": "Yogesh Lonkar",
+    "email": "yogesh@lonkar.org"
+  },
+  "metadata": {
+    "description": "The notify-claude hooks and the /notify skill, from the repository that builds Notify.app.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "notification-companion",
+      "source": "./",
+      "description": "A desktop banner when Claude Code finishes or stops to ask: /notify arms the session, the click jumps to the tmux pane, Info shows the last message. Needs Notify.app from the same repository.",
+      "category": "productivity",
+      "keywords": [
+        "notification",
+        "macos",
+        "hooks",
+        "tmux"
+      ]
+    }
+  ]
+}
