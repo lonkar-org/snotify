@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# notify - a desktop notification from a script, under Notify.app's own name.
+#
+# Usage: notify --title TITLE [--body BODY] [--subtitle TEXT] [--sound NAME|default]
+#               [--group KEY] [--on-click 'shell command']
+#               [--info-file PATH.md | --info-md 'markdown']
+#   --sound      a system sound by name (Basso, Pop, Glass... see
+#                /System/Library/Sounds), or default; silent when absent
+#   --group      a repeat with the same key replaces the earlier banner
+#   --on-click   run by /bin/sh when the banner is clicked, with the PATH and
+#                working directory this call had; background anything slow
+#   --info-file  Markdown behind an Info button on the banner (hover the
+#                banner for it); the window shows it, selectable, links
+#                live, with a Copy button. - reads it from stdin.
+#   --info-md    the same, given inline; kept under ~/.local/state/notify
+#
+# Exit 0 posted, 2 usage, 3 notifications are turned off for Notify.app.
+#
+# The app is looked for as NOTIFY_APP, then the bundle this script sits inside
+# (a cask links Contents/Resources/bin/notify onto PATH), then
+# ~/Applications/Notify.app (`just install`) and /Applications/Notify.app (the
+# DMG). Without one this falls back to osascript on macOS and notify-send
+# elsewhere, with the title, body and sound only: a click then does nothing.
+set -euo pipefail
+
+self=${0##*/}
+here=$(cd -- "$(dirname -- "$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")")" && pwd)
+
+usage() { sed -n '4,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+bin=""
+for app in "${NOTIFY_APP:-}" "$here/../../.." "$HOME/Applications/Notify.app" /Applications/Notify.app; do
+  [[ -n $app && -x $app/Contents/MacOS/Notify ]] || continue
+  bin=$app/Contents/MacOS/Notify
+  break
+done
+if [[ -n $bin && $(uname -s) == Darwin ]]; then
+  exec "$bin" "$@"
+fi
+
+title="" body="" sound=""
+while (( $# )); do
+  case $1 in
+    --title) title=${2:-}; shift 2 ;;
+    --body) body=${2:-}; shift 2 ;;
+    --sound) sound=${2:-}; shift 2 ;;
+    --subtitle|--group|--on-click|--info-file|--info-md) shift 2 ;;
+    -h|--help) usage ;;
+    *) printf '%s: unknown argument %s\n' "$self" "$1" >&2; usage ;;
+  esac
+done
+[[ -n $title ]] || { printf '%s: --title is required\n' "$self" >&2; usage; }
+
+case $(uname -s) in
+  Darwin)
+    # Text goes in as arguments, never spliced into the AppleScript, so a quote
+    # in a title cannot break or alter the script.
+    script='display notification (item 2 of argv) with title (item 1 of argv)'
+    if [[ -n $sound ]]; then
+      [[ $sound == default ]] && sound=Ping
+      script="$script sound name (item 3 of argv)"
+    fi
+    osascript -e 'on run argv' -e "$script" -e 'end run' "$title" "$body" "${sound%.*}" >/dev/null
+    ;;
+  *)
+    command -v notify-send >/dev/null 2>&1 || exit 0
+    notify-send "$title" "$body"
+    ;;
+esac

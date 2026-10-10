@@ -1,0 +1,6 @@
+# Build output: `just build dist` and `just dmg dist`, and what CI uploads.
+dist/
+
+# Claude Code's per-machine state.
+.claude/settings.local.json
+.claude/worktrees/
