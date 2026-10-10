@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Point a copy of the Notify cask at a published release.
+# Point a copy of the Snotify cask at a published release.
 #
 # usage: homebrew/update-cask.sh <tag> <checksums.txt> <cask.rb>
 #          <tag>            the release tag, for example v0.1.0
 #          <checksums.txt>  the file published with that release, one line
-#                           `<sha256>  Notify-<version>.dmg`
+#                           `<sha256>  Snotify-<version>.dmg`
 #          <cask.rb>        the cask to rewrite in place
 #
 # Rewrites the `version` and `sha256` lines. The DMG for the tag has to be in
@@ -14,15 +14,15 @@
 # The release workflow runs this against lonkar-org/homebrew-tap's copy after
 # the publish job. By hand, when a release predates the automation:
 #
-#   gh release download v0.1.0 --repo lonkar-org/notification-companion --pattern checksums.txt
-#   homebrew/update-cask.sh v0.1.0 checksums.txt /path/to/homebrew-tap/Casks/notify.rb
+#   gh release download v0.1.0 --repo lonkar-org/snotify --pattern checksums.txt
+#   homebrew/update-cask.sh v0.1.0 checksums.txt /path/to/homebrew-tap/Casks/snotify.rb
 set -euo pipefail
 
 usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 [[ $# -eq 3 ]] || usage
 tag=$1 sums=$2 cask=$3
 version=${tag#v}
-asset=Notify-$version.dmg
+asset=Snotify-$version.dmg
 
 [[ -f $sums ]] || { echo "no checksums file at $sums" >&2; exit 1; }
 [[ -f $cask ]] || { echo "no cask at $cask" >&2; exit 1; }

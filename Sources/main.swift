@@ -1,13 +1,13 @@
-// Notify.app - macOS notifications from the command line, under this app's own
+// Snotify.app - macOS notifications from the command line, under this app's own
 // name and icon, with a shell command to run when a banner is clicked, an Info
 // button that opens a window of Markdown the script supplied, and a history of
 // every post that the same window searches.
 //
-// Built and installed by scripts/notify-app.sh; called through bin/notify,
+// Built and installed by scripts/snotify-app.sh; called through bin/snotify,
 // which is the client every script uses. Launched with --title it posts and
 // exits. Launched with a subcommand (history, show, config, icons) it does that
 // and exits, or opens the history window. Launched with --resident, by the
-// LaunchAgent `notify config login on` writes, it stays: menu bar item and Dock
+// LaunchAgent `snotify config login on` writes, it stays: menu bar item and Dock
 // icon as configured, and takes the clicks. Launched with nothing, which is
 // what macOS does for a click when no instance is running and what a double
 // click in Finder does, it waits a moment for the click and otherwise opens
@@ -17,7 +17,7 @@
 // process started by launchd, whose PATH has no Homebrew or ~/.local/bin, and
 // `tmux` or `open -a` must still resolve.
 //
-// Every post is a Markdown file under ~/.local/state/notify/history with its
+// Every post is a Markdown file under ~/.local/state/snotify/history with its
 // metadata as frontmatter and the Info text as body (History.swift). The
 // banner's Info button and the history window both read that file.
 
@@ -25,17 +25,17 @@ import AppKit
 import UserNotifications
 
 let usage = """
-usage: notify --title TITLE [--body BODY] [--subtitle TEXT] [--sound NAME|default]
+usage: snotify --title TITLE [--body BODY] [--subtitle TEXT] [--sound NAME|default]
               [--group KEY] [--on-click 'shell command']
               [--info-file PATH.md | --info-md 'markdown']
               [--from LABEL] [--icon GLYPH] [--color COLOR] [--meta KEY=VALUE]...
-       notify history [QUERY...] [--since 7d|2026-10-01] [--limit N] [--json | --paths]
-       notify show [QUERY...] [--snapshot OUT.png]
+       snotify history [QUERY...] [--since 7d|2026-10-01] [--limit N] [--json | --paths]
+       snotify show [QUERY...] [--snapshot OUT.png]
                                            open the history window; --snapshot writes it to a PNG and exits
-       notify config [KEY [VALUE]]         menubar, dock, login: on|off; retention: DAYS|forever
-       notify icons [QUERY] [--png OUT.png [--color COLOR]]
+       snotify config [KEY [VALUE]]         menubar, dock, login: on|off; retention: DAYS|forever
+       snotify icons [QUERY] [--png OUT.png [--color COLOR]]
                                            search the glyph names; --png renders the first match
-       notify --show-info PATH.md [--title TITLE] [--snapshot OUT.png]
+       snotify --show-info PATH.md [--title TITLE] [--snapshot OUT.png]
 
   --from    who is sending, as the history and the menu bar show it
   --icon    a Nerd Fonts name (fa-rocket, md-robot), sf:NAME for an SF Symbol,
@@ -45,11 +45,11 @@ usage: notify --title TITLE [--body BODY] [--subtitle TEXT] [--sound NAME|defaul
   --meta    anything else worth keeping with the entry, repeatable
 """
 
-let bundleID = "org.lonkar.notify"
+let bundleID = "org.lonkar.snotify"
 let infoCategory = bundleID + ".info"
 let infoAction = "info"
-let stateDir = (ProcessInfo.processInfo.environment["XDG_STATE_HOME"].map { $0 + "/notify" }
-    ?? NSHomeDirectory() + "/.local/state/notify")
+let stateDir = (ProcessInfo.processInfo.environment["XDG_STATE_HOME"].map { $0 + "/snotify" }
+    ?? NSHomeDirectory() + "/.local/state/snotify")
 
 enum Mode {
     case launched, post, showInfo, history, show, config, icons, resident
@@ -82,7 +82,7 @@ struct Options {
 }
 
 func fail(_ message: String, code: Int32) -> Never {
-    FileHandle.standardError.write(("Notify: " + message + "\n").data(using: .utf8)!)
+    FileHandle.standardError.write(("Snotify: " + message + "\n").data(using: .utf8)!)
     exit(code)
 }
 
@@ -146,7 +146,7 @@ func parse(_ args: [String]) -> Options {
     }
     if o.mode == .post && o.title.isEmpty { fail("--title is required\n" + usage, code: 2) }
     if let c = o.color, parseColor(c) == nil { fail("--color \(c) is not a colour name or #rrggbb", code: 2) }
-    if let s = o.icon, IconSpec(s) == nil { fail("--icon \(s) is not a glyph name, sf:NAME, U+XXXX or one character; `notify icons QUERY` searches the names", code: 2) }
+    if let s = o.icon, IconSpec(s) == nil { fail("--icon \(s) is not a glyph name, sf:NAME, U+XXXX or one character; `snotify icons QUERY` searches the names", code: 2) }
     return o
 }
 
@@ -156,7 +156,7 @@ func installMenu(_ delegate: Delegate) {
     let main = NSMenu()
     let appItem = NSMenuItem(); main.addItem(appItem)
     let appMenu = NSMenu()
-    appMenu.addItem(withTitle: "Quit Notify", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    appMenu.addItem(withTitle: "Quit Snotify", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appItem.submenu = appMenu
     let fileItem = NSMenuItem(); main.addItem(fileItem)
     let fileMenu = NSMenu(title: "File")
@@ -306,7 +306,7 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     @objc func toggleSetting(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         let on = sender.state == .on
-        if let err = Config.set(key, on ? "off" : "on") { NSLog("Notify: %@", err) }
+        if let err = Config.set(key, on ? "off" : "on") { NSLog("Snotify: %@", err) }
         applySettings()
     }
 
@@ -366,7 +366,7 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
         let hits = Glyphs.search(q, limit: q.isEmpty ? 40 : 200)
         if hits.isEmpty { print("no glyph name contains \(q)"); return }
         for h in hits { print("\(h.char)  \(h.name)  U+\(h.code.uppercased())") }
-        if q.isEmpty { print("… \(Glyphs.index.count) names; `notify icons QUERY` narrows them") }
+        if q.isEmpty { print("… \(Glyphs.index.count) names; `snotify icons QUERY` narrows them") }
     }
 
     func runConfig(_ o: Options) {
@@ -430,8 +430,8 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
                 fail("authorization: \(error.localizedDescription)", code: 3)
             }
             if !granted {
-                entry.set("status", "failed: notifications are off for Notify.app"); entry.write()
-                fail("notifications are off for Notify.app; turn them on in System Settings > Notifications > Notify", code: 3)
+                entry.set("status", "failed: notifications are off for Snotify.app"); entry.write()
+                fail("notifications are off for Snotify.app; turn them on in System Settings > Notifications > Snotify", code: 3)
             }
             let content = UNMutableNotificationContent()
             content.title = o.title
@@ -461,7 +461,7 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
             content.userInfo = info
             if let spec = o.icon, let icon = IconSpec(spec) {
                 let color = o.color.flatMap(parseColor) ?? .labelColor
-                let dir = NSTemporaryDirectory() + "notify-" + UUID().uuidString
+                let dir = NSTemporaryDirectory() + "snotify-" + UUID().uuidString
                 try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
                 let png = dir + "/icon.png"
                 if let image = iconImage(icon, color: color, pixels: 256), writePNG(image, to: png),
@@ -526,7 +526,7 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
             try p.run()
             p.waitUntilExit()
         } catch {
-            NSLog("Notify: on-click failed: %@", error.localizedDescription)
+            NSLog("Snotify: on-click failed: %@", error.localizedDescription)
         }
     }
 

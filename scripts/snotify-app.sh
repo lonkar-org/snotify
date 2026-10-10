@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# notify-app.sh - build, package and install Notify.app, the notifier bin/notify uses.
+# snotify-app.sh - build, package and install Snotify.app, the notifier bin/snotify uses.
 #
-# Usage: scripts/notify-app.sh { build DIR [VERSION] | dmg DIR [VERSION] | status
+# Usage: scripts/snotify-app.sh { build DIR [VERSION] | dmg DIR [VERSION] | status
 #                                | install | test [--scheduled] | uninstall }
 #        (or: just build | dmg | status | install | test | uninstall)
-#   build DIR  build Notify.app into DIR, signed, with bin/ and skills/ inside
+#   build DIR  build Snotify.app into DIR, signed, with bin/ and skills/ inside
 #              it under Contents/Resources, so the bundle alone is a complete
 #              install. VERSION goes into Info.plist; the default is the
 #              nearest git tag, or 0.0.0 outside a checkout.
-#   dmg DIR    build, then write DIR/Notify-VERSION.dmg with the app and an
+#   dmg DIR    build, then write DIR/Snotify-VERSION.dmg with the app and an
 #              Applications link, and DIR/checksums.txt beside it. What the
 #              release workflow publishes and the Homebrew cask downloads.
-#   status     exit 0 when ~/Applications/Notify.app is installed, signed, and
+#   status     exit 0 when ~/Applications/Snotify.app is installed, signed, and
 #              built from the sources in Sources/ as they are now
-#   install    build it, sign it, install it, link ~/.local/bin/notify and
-#              notify-claude and ~/.claude/skills/notify, and
+#   install    build it, sign it, install it, link ~/.local/bin/snotify and
+#              snotify-claude and ~/.claude/skills/notify, and
 #              post a first notification (macOS asks for permission on that one)
 #   test       post a notification whose click writes a file, and say whether
 #              the click arrived within 30 s. --scheduled posts it from a
@@ -44,19 +44,19 @@ self=${0##*/}
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 root=$(cd -- "$here/.." && pwd)
 src=$root/Sources
-wrapper=$root/bin/notify
-label=org.lonkar.notify
-app=$HOME/Applications/Notify.app
-app_exec=$app/Contents/MacOS/Notify
+wrapper=$root/bin/snotify
+label=org.lonkar.snotify
+app=$HOME/Applications/Snotify.app
+app_exec=$app/Contents/MacOS/Snotify
 app_stamp=$app/Contents/Resources/source.sha256
-link=$HOME/.local/bin/notify
+link=$HOME/.local/bin/snotify
 # The Claude Code hook, linked beside it; ~/.claude/settings.json calls it by path.
-claude_hook=$root/bin/notify-claude
-claude_link=$HOME/.local/bin/notify-claude
+claude_hook=$root/bin/snotify-claude
+claude_link=$HOME/.local/bin/snotify-claude
 # The /notify skill, linked as a directory so Claude Code lists it.
 skill=$root/skills/notify
 skill_link=$HOME/.claude/skills/notify
-state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/notify
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/snotify
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 die() { printf '%s: error: %s\n' "$self" "$1" >&2; exit 1; }
@@ -85,20 +85,20 @@ version_of() { # version_of [VERSION]
   printf '%s' "${v#v}"
 }
 
-build_app() { # build_app DIR [VERSION]  -> DIR/Notify.app
+build_app() { # build_app DIR [VERSION]  -> DIR/Snotify.app
   local dir=$1 version stage tmp
   version=$(version_of "${2:-}")
-  stage=$dir/Notify.app
+  stage=$dir/Snotify.app
   tmp=$(mktemp -d)
   command -v swiftc >/dev/null 2>&1 || die "swiftc not found; install the Xcode command line tools"
   rm -rf "$stage"
   mkdir -p "$stage/Contents/MacOS" "$stage/Contents/Resources"
   # shellcheck disable=SC2046  # the file list is one path per line, none with spaces
   swiftc -O -swift-version 5 -framework AppKit -framework UserNotifications -framework CoreText \
-    -o "$stage/Contents/MacOS/Notify" $(app_sources)
+    -o "$stage/Contents/MacOS/Snotify" $(app_sources)
   swiftc -O -swift-version 5 -framework AppKit -o "$tmp/icon" "$src/icon.swift"
-  "$tmp/icon" "$tmp/Notify.iconset"
-  iconutil -c icns "$tmp/Notify.iconset" -o "$stage/Contents/Resources/Notify.icns"
+  "$tmp/icon" "$tmp/Snotify.iconset"
+  iconutil -c icns "$tmp/Snotify.iconset" -o "$stage/Contents/Resources/Snotify.icns"
   rm -rf "$tmp"
   # The command, the hook and the skill travel inside the bundle, so a DMG or
   # a cask install has them: the cask links Contents/Resources/bin onto PATH.
@@ -114,10 +114,10 @@ build_app() { # build_app DIR [VERSION]  -> DIR/Notify.app
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>$label</string>
-  <key>CFBundleName</key><string>Notify</string>
-  <key>CFBundleDisplayName</key><string>Notify</string>
-  <key>CFBundleExecutable</key><string>Notify</string>
-  <key>CFBundleIconFile</key><string>Notify</string>
+  <key>CFBundleName</key><string>Snotify</string>
+  <key>CFBundleDisplayName</key><string>Snotify</string>
+  <key>CFBundleExecutable</key><string>Snotify</string>
+  <key>CFBundleIconFile</key><string>Snotify</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>${version%%-*}</string>
@@ -147,8 +147,8 @@ case ${1:-} in
     dir=${2:?usage: $self build DIR [VERSION]}
     mkdir -p "$dir"
     build_app "$dir" "${3:-}"
-    printf 'built %s/Notify.app, version %s\n' "$dir" \
-      "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$dir/Notify.app/Contents/Info.plist")"
+    printf 'built %s/Snotify.app, version %s\n' "$dir" \
+      "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$dir/Snotify.app/Contents/Info.plist")"
     ;;
   dmg)
     dir=${2:?usage: $self dmg DIR [VERSION]}
@@ -156,15 +156,15 @@ case ${1:-} in
     mkdir -p "$dir"
     build_app "$dir" "$version"
     stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
-    cp -R "$dir/Notify.app" "$stage/"
+    cp -R "$dir/Snotify.app" "$stage/"
     ln -s /Applications "$stage/Applications"
     cp "$root/README.md" "$root/LICENSE" "$stage/"
-    dmg=$dir/Notify-$version.dmg
+    dmg=$dir/Snotify-$version.dmg
     rm -f "$dmg"
     # UDZO is the compressed read-only image every drag-to-Applications DMG is;
     # -fs HFS+ because APFS images do not mount on macOS 10.12 and older, and
     # costs nothing here.
-    hdiutil create -quiet -volname "Notify $version" -srcfolder "$stage" -ov -fs HFS+ -format UDZO "$dmg"
+    hdiutil create -quiet -volname "Snotify $version" -srcfolder "$stage" -ov -fs HFS+ -format UDZO "$dmg"
     (cd "$dir" && shasum -a 256 "${dmg##*/}" > checksums.txt)
     printf 'wrote %s\n' "$dmg"
     cat "$dir/checksums.txt"
@@ -177,7 +177,7 @@ case ${1:-} in
     build_app "$tmp"
     mkdir -p "$HOME/Applications" "$HOME/.local/bin" "$state_dir"
     rm -rf "$app"
-    cp -R "$tmp/Notify.app" "$app"
+    cp -R "$tmp/Snotify.app" "$app"
     "$lsregister" -f "$app" >/dev/null 2>&1 || true
     ln -sfn "$wrapper" "$link"
     ln -sfn "$claude_hook" "$claude_link"
@@ -185,9 +185,9 @@ case ${1:-} in
     ln -sfn "$skill" "$skill_link"
     printf 'installed %s\nlinked %s -> %s\nlinked %s -> %s\nlinked %s -> %s\n' \
       "$app" "$link" "$wrapper" "$claude_link" "$claude_hook" "$skill_link" "$skill"
-    printf 'posting a first notification; if macOS asks, allow Notify to notify\n'
-    "$wrapper" --title "Notify is installed" --body "Scripts on this machine notify through this app now." \
-      || printf 'that failed; see above, then System Settings > Notifications > Notify\n' >&2
+    printf 'posting a first notification; if macOS asks, allow Snotify to notify\n'
+    "$wrapper" --title "Snotify is installed" --body "Scripts on this machine notify through this app now." \
+      || printf 'that failed; see above, then System Settings > Notifications > Snotify\n' >&2
     ;;
   test)
     installed_ok || die "not installed or stale; run $0 install"
@@ -206,8 +206,8 @@ case ${1:-} in
         printf '%s\n' '<plist version="1.0"><dict>'
         printf '  <key>Label</key><string>%s</string>\n' "$probe"
         printf '  <key>ProgramArguments</key><array>'
-        printf '<string>%s</string>' "$wrapper" --title "Notify test from launchd" \
-          --body "Click me: that should write $marker" --sound Pop --group notify-test --on-click "$cmd"
+        printf '<string>%s</string>' "$wrapper" --title "Snotify test from launchd" \
+          --body "Click me: that should write $marker" --sound Pop --group snotify-test --on-click "$cmd"
         printf '</array>\n'
         printf '%s\n' '  <key>RunAtLoad</key><true/>'
         printf '  <key>StandardOutPath</key><string>%s/probe.log</string>\n' "$state_dir"
@@ -221,8 +221,8 @@ case ${1:-} in
       rm -f "$probe_plist"
       [[ -s $state_dir/probe.log ]] && { printf 'the poster said:\n'; cat "$state_dir/probe.log"; }
     else
-      "$wrapper" --title "Notify test" --body "Click me: that should write $marker" \
-        --sound Pop --group notify-test --on-click "$cmd"
+      "$wrapper" --title "Snotify test" --body "Click me: that should write $marker" \
+        --sound Pop --group snotify-test --on-click "$cmd"
     fi
     printf 'posted; click the banner within 30 s\n'
     for _ in $(seq 1 60); do

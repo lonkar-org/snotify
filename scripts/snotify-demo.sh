@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# notify-demo.sh - fill the history with a demo set: twenty notifications from
+# snotify-demo.sh - fill the history with a demo set: twenty notifications from
 # four mocked senders (backup.sh, deploy.sh, watchdog.sh and Claude Code), each
 # with its own glyph and colour, some with Info Markdown, a click command, a
 # group that replaces an earlier banner, and extra --meta keys. The point is a
-# history window with something in it: open it with `notify show` after.
+# history window with something in it: open it with `snotify show` after.
 #
-# Usage: scripts/notify-demo.sh [--quiet]      (or: just demo)
+# Usage: scripts/snotify-demo.sh [--quiet]      (or: just demo)
 #   --quiet   post with no sound (the default has none either, this also drops
 #             the per-entry echo)
 #
-# Each sender is a small script in a temp dir that runs `notify "$@"`, so the
+# Each sender is a small script in a temp dir that runs `snotify "$@"`, so the
 # entry's sender.process is the mock's name and not this script. Twenty banners
 # will stack in Notification Center; clear them there or let them scroll.
 set -euo pipefail
@@ -17,7 +17,7 @@ set -euo pipefail
 quiet=0
 [[ ${1:-} == --quiet ]] && quiet=1
 
-command -v notify >/dev/null || { echo "notify is not on PATH; run just install first" >&2; exit 1; }
+command -v snotify >/dev/null || { echo "snotify is not on PATH; run just install first" >&2; exit 1; }
 
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
@@ -90,12 +90,12 @@ send watchdog.sh --title "Memory 96%" --body "db1, swap in use" --from watchdog.
   --icon fa-memory --color red --meta host=db1 --meta pct=96
 
 # Claude Code: the shape the hook sends, a robot, teal on finish and orange on a question
-send claude-code --title "Claude Code finished" --subtitle "notification-companion" --body "History and the window are in, tests green" \
-  --from "Claude Code" --icon md-robot --color teal --meta claude_session=demo-1 --meta project=notification-companion \
+send claude-code --title "Claude Code finished" --subtitle "snotify" --body "History and the window are in, tests green" \
+  --from "Claude Code" --icon md-robot --color teal --meta claude_session=demo-1 --meta project=snotify \
   --info-md $'# Claude Code\n\nTwo commits on main, tree clean.\n\n- a7e7cc6 vendor the Nerd Font\n- ee7336a history, glyphs, the window'
 send claude-code --title "Claude Code has a question" --subtitle "vachan" --body "Keep the old redirects or drop them?" \
   --from "Claude Code" --icon md-robot --color orange --meta claude_session=demo-2 --meta project=vachan
 send claude-code --title "Claude Code is idle" --subtitle "runner-fleet" --body "Waiting on you for 10 minutes" \
   --from "Claude Code" --icon md-robot --color gray --meta claude_session=demo-3 --meta project=runner-fleet
 
-echo "posted $n; open the window with: notify show"
+echo "posted $n; open the window with: snotify show"

@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016  # backticks in grep patterns are Markdown, not expansions
-# notify-claude-test.sh - exercise bin/notify-claude with fake transcripts and hook
+# snotify-claude-test.sh - exercise bin/snotify-claude with fake transcripts and hook
 # events, no Claude Code involved. One real banner is posted by step 4.
 #
-# Usage: scripts/notify-claude-test.sh   (or: just test-claude)
+# Usage: scripts/snotify-claude-test.sh   (or: just test-claude)
 #
 # Exit 1 on the first step that does not hold. The state goes to a temporary
 # XDG_STATE_HOME, so the real armed-session flags are untouched.
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
-nc=$here/../bin/notify-claude
+nc=$here/../bin/snotify-claude
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 export XDG_STATE_HOME=$t/state
-export NOTIFY_CLAUDE_GRACE=1 # the queued /notify grace period, short for the test
+export SNOTIFY_CLAUDE_GRACE=1 # the queued /notify grace period, short for the test
 sid=test-session-1
-flag=$XDG_STATE_HOME/notify/claude/$sid
+flag=$XDG_STATE_HOME/snotify/claude/$sid
 
 fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
 
@@ -32,7 +32,7 @@ work=$t/work.jsonl
 # an idle arming turn: /notify as a user message of its own, and a one-line reply
 idle=$t/idle.jsonl
 {
-  printf '%s\n' '{"type":"user","message":{"role":"user","content":"<command-name>/notify</command-name>\n<command-message>notify</command-message>"}}'
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":"<command-name>/notify</command-name>\n<command-message>snotify</command-message>"}}'
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Armed."}]}}'
 } > "$idle"
 
@@ -45,12 +45,12 @@ event() { # event TRANSCRIPT [PROMPT] [LAST_ASSISTANT_MESSAGE] [PROMPT_ID]
 
 # A Stop records when the turn ended, and a /notify within two seconds of it
 # counts as queued behind finished work. Between steps, pretend a minute passed.
-settle() { printf '%s' $(( $(date +%s) - 60 )) > "$XDG_STATE_HOME/notify/claude/$sid.stop"; }
+settle() { printf '%s' $(( $(date +%s) - 60 )) > "$XDG_STATE_HOME/snotify/claude/$sid.stop"; }
 work_prompt() { event "$work" "fix the build please" "" p-work | "$nc" prompt; }
 
 work_prompt
 [[ ! -f $flag ]] || fail "a plain prompt armed the session"
-[[ $(cat "$XDG_STATE_HOME/notify/claude/$sid.last") == p-work ]] || fail "the prompt id was not recorded"
+[[ $(cat "$XDG_STATE_HOME/snotify/claude/$sid.last") == p-work ]] || fail "the prompt id was not recorded"
 echo "1 ok: a plain prompt leaves it unarmed, and leaves its id"
 
 event "$work" "/notify" "" p-arm | TMUX_PANE=%42 TERM_PROGRAM=ghostty "$nc" prompt
@@ -60,15 +60,15 @@ grep -q '^terminal=Ghostty$' "$flag" || fail "the terminal was not read from TER
 grep -q '^prompt_id=p-arm$' "$flag" || fail "the prompt id was not recorded"
 echo "2 ok: /notify armed, pane, terminal and prompt id recorded"
 
-# installed as the plugin, the skill is /notification-companion:notify
+# installed as the plugin, the skill is /snotify:notify
 "$nc" disarm "$sid" >/dev/null
-event "$work" "/notification-companion:notify lunch | pizza" "" p-arm | TERM_PROGRAM=iTerm.app NOTIFY_CLAUDE_TERMINAL=WezTerm "$nc" prompt
-[[ -f $flag ]] || fail "the plugin's /notification-companion:notify did not arm"
+event "$work" "/snotify:notify lunch | pizza" "" p-arm | TERM_PROGRAM=iTerm.app SNOTIFY_CLAUDE_TERMINAL=WezTerm "$nc" prompt
+[[ -f $flag ]] || fail "the plugin's /snotify:notify did not arm"
 grep -q '^title=lunch$' "$flag" || fail "plugin form: subject"
 grep -q '^body=pizza$' "$flag" || fail "plugin form: body"
-grep -q '^terminal=WezTerm$' "$flag" || fail "NOTIFY_CLAUDE_TERMINAL did not win over TERM_PROGRAM"
-event "$work" "/notification-companion:notify off" "" p-off | "$nc" prompt
-[[ ! -f $flag ]] || fail "the plugin's /notification-companion:notify off did not disarm"
+grep -q '^terminal=WezTerm$' "$flag" || fail "SNOTIFY_CLAUDE_TERMINAL did not win over TERM_PROGRAM"
+event "$work" "/snotify:notify off" "" p-off | "$nc" prompt
+[[ ! -f $flag ]] || fail "the plugin's /snotify:notify off did not disarm"
 event "$work" "/notify" "" p-arm | TMUX_PANE=%42 TERM_PROGRAM=ghostty "$nc" prompt
 echo "2b ok: the plugin's spelling arms and disarms too"
 
@@ -92,7 +92,7 @@ echo "3 ok: the idle arming turn keeps it armed, no banner"
 interactive=$t/interactive.jsonl
 {
   cat "$idle"
-  printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"Base directory for this skill: /x/notify\n\n# notify"}]}}'
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"Base directory for this skill: /x/snotify\n\n# snotify"}]}}'
   printf '%s\n' '{"type":"user","message":{"content":"<system-reminder>\nDirectory-scoped variants exist\n</system-reminder>"}}'
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Armed."}]}}'
 } > "$interactive"
@@ -102,7 +102,7 @@ event "$interactive" | "$nc" stop
 echo "3b ok: armed by hand, the transcript still spots the arming turn behind the skill text"
 plugin_idle=$t/plugin-idle.jsonl
 {
-  printf '%s\n' '{"type":"user","message":{"role":"user","content":"<command-name>/notification-companion:notify</command-name>\n<command-message>notify</command-message>"}}'
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":"<command-name>/snotify:notify</command-name>\n<command-message>snotify</command-message>"}}'
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Armed."}]}}'
 } > "$plugin_idle"
 "$nc" arm "$sid" >/dev/null
@@ -157,7 +157,7 @@ event "$queued" "/notify queued | work was done" "" p-arm | "$nc" prompt
 grep -q '^queued=1$' "$flag" || fail "a /notify right after a Stop was not marked queued"
 event "$queued" "" "Armed, you will get a banner." p-arm | "$nc" stop
 [[ -f $flag ]] || fail "the queued /notify turn posted before the grace period"
-sleep $((NOTIFY_CLAUDE_GRACE + 1))
+sleep $((SNOTIFY_CLAUDE_GRACE + 1))
 [[ ! -f $flag ]] || fail "the grace period did not post"
 grep -q '^# queued$' "$flag.md" || fail "queued banner title"
 grep -q 'Build fixed, two tests were stale' "$flag.md" || fail "queued banner should carry the work's reply"
@@ -171,7 +171,7 @@ event "$work" | "$nc" stop
 event "$queued" "/notify" "" p-arm | "$nc" prompt
 event "$queued" "" "Armed." p-arm | "$nc" stop
 event "$work" "and now the tests" "" p-work2 | "$nc" prompt
-sleep $((NOTIFY_CLAUDE_GRACE + 1))
+sleep $((SNOTIFY_CLAUDE_GRACE + 1))
 [[ -f $flag ]] || fail "the grace period posted although a prompt followed"
 event "$work" "" "Tests pass." p-work2 | "$nc" stop
 [[ ! -f $flag ]] || fail "the following prompt's Stop did not post"
@@ -223,7 +223,7 @@ grep -q '^body=$' "$flag" || fail "subject | - : body should be empty"
 settle
 echo "9b ok: /notify SUBJECT - and SUBJECT | - keep Claude's message as the body"
 
-event "$work" $'<command-name>/notify</command-name>\n<command-message>notify</command-message>\n<command-args>lunch | pizza is here</command-args>' "" p-arm | "$nc" prompt
+event "$work" $'<command-name>/notify</command-name>\n<command-message>snotify</command-message>\n<command-args>lunch | pizza is here</command-args>' "" p-arm | "$nc" prompt
 grep -q '^title=lunch$' "$flag" || fail "expanded form: subject"
 grep -q '^body=pizza is here$' "$flag" || fail "expanded form: body"
 "$nc" disarm "$sid" >/dev/null
@@ -231,7 +231,7 @@ echo "10 ok: the expanded skill form carries the text in command-args"
 
 # asked: a permission prompt or a question while armed posts and stays armed; the
 # same event while unarmed is nothing
-event "$work" | NOTIFY_CLAUDE_GRACE=0 "$nc" stop
+event "$work" | SNOTIFY_CLAUDE_GRACE=0 "$nc" stop
 settle
 jq -c -n --arg s "$sid" '{session_id: $s, hook_event_name: "Notification", message: "Claude needs your permission to run rm"}' | "$nc" asked
 [[ ! -f $flag.asked.md ]] || fail "asked posted while unarmed"

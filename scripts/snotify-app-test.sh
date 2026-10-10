@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# notify-app-test.sh - exercise a built Notify.app: the history files a post
+# snotify-app-test.sh - exercise a built Snotify.app: the history files a post
 # writes, the history, icons and config subcommands, and the window rendered
 # to a PNG. No click is needed and nothing on the machine is touched: the
 # state goes to a temporary XDG_STATE_HOME and the settings to a test defaults
-# domain (NOTIFY_DEFAULTS_SUITE), which is deleted at the end.
+# domain (SNOTIFY_DEFAULTS_SUITE), which is deleted at the end.
 #
-# Usage: scripts/notify-app-test.sh [APP]   (default dist/Notify.app; or: just test-app)
+# Usage: scripts/snotify-app-test.sh [APP]   (default dist/Snotify.app; or: just test-app)
 #
 # Posting needs the notification permission. Where it is denied, a CI runner
 # say, the post exits 3 and the entry still records `status: failed: ...`,
@@ -14,16 +14,16 @@
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
-app=${1:-$here/../dist/Notify.app}
-bin=$app/Contents/MacOS/Notify
-[[ -x $bin ]] || { echo "no app at $app; run scripts/notify-app.sh build dist first" >&2; exit 1; }
+app=${1:-$here/../dist/Snotify.app}
+bin=$app/Contents/MacOS/Snotify
+[[ -x $bin ]] || { echo "no app at $app; run scripts/snotify-app.sh build dist first" >&2; exit 1; }
 
 t=$(mktemp -d)
-suite=org.lonkar.notify.test.$$
+suite=org.lonkar.snotify.test.$$
 cleanup() { rm -rf "$t"; defaults delete "$suite" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
-export XDG_STATE_HOME=$t/state NOTIFY_DEFAULTS_SUITE=$suite
-hist=$XDG_STATE_HOME/notify/history
+export XDG_STATE_HOME=$t/state SNOTIFY_DEFAULTS_SUITE=$suite
+hist=$XDG_STATE_HOME/snotify/history
 
 fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
 
@@ -32,7 +32,13 @@ fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
 post() { # post COMMAND ARGS...
   "$@" & local pid=$!
   for _ in $(seq 1 40); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
-  if kill -0 "$pid" 2>/dev/null; then kill "$pid"; fail "the post did not finish in 20 s"; fi
+  if kill -0 "$pid" 2>/dev/null; then
+    # the app may be a grandchild (through the caller script): kill it too, or
+    # it keeps stdout open and a pipe after this script never sees EOF
+    pkill -TERM -P "$pid" 2>/dev/null || true
+    kill "$pid"
+    fail "the post did not finish in 20 s; a permission dialog for Snotify waiting on the screen does this, answer it and rerun"
+  fi
   wait "$pid" && return 0
   local rc=$?
   [[ $rc -eq 3 ]] || fail "the post exited $rc"
@@ -40,7 +46,7 @@ post() { # post COMMAND ARGS...
 }
 
 # a script in the middle, so the sender is the script and not this shell. It
-# runs the app as a child the way a script runs `notify`, which then execs
+# runs the app as a child the way a script runs `snotify`, which then execs
 # the app, so the app's parent is the script.
 caller=$t/backup.sh
 printf '#!/usr/bin/env bash\n"$@"\n' > "$caller"

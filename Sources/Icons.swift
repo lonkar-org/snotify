@@ -7,7 +7,7 @@
 // Symbols Nerd Font Mono travels in the bundle (Resources/nerd-fonts, MIT,
 // scripts/fetch-nerd-font.sh pins the release) and is registered for this
 // process only, so nothing is installed on the machine. glyphnames.json beside
-// it maps the 10,996 names to codepoints; `notify icons QUERY` searches it.
+// it maps the 10,996 names to codepoints; `snotify icons QUERY` searches it.
 
 import AppKit
 import CoreText

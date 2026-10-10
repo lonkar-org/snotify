@@ -1,7 +1,7 @@
-// Resident.swift - what keeps Notify running between banners, when asked to:
+// Resident.swift - what keeps Snotify running between banners, when asked to:
 // the settings (menu bar icon, Dock icon, launch at login, retention), the
 // LaunchAgent that starts it at login, the menu bar item, and the two
-// distributed notifications a transient `notify show` or `notify config` uses
+// distributed notifications a transient `snotify show` or `snotify config` uses
 // to reach the instance already running.
 //
 // Posting stays post-and-exit whether or not an instance is resident; macOS
@@ -11,10 +11,10 @@
 import AppKit
 
 enum Config {
-    /// NOTIFY_DEFAULTS_SUITE moves the settings to another domain, so a test
+    /// SNOTIFY_DEFAULTS_SUITE moves the settings to another domain, so a test
     /// run leaves the real ones alone.
     static let defaults: UserDefaults = {
-        if let suite = ProcessInfo.processInfo.environment["NOTIFY_DEFAULTS_SUITE"], let d = UserDefaults(suiteName: suite) { return d }
+        if let suite = ProcessInfo.processInfo.environment["SNOTIFY_DEFAULTS_SUITE"], let d = UserDefaults(suiteName: suite) { return d }
         return .standard
     }()
     static var menubar: Bool {
@@ -76,9 +76,9 @@ enum Config {
     }
 }
 
-/// ~/Library/LaunchAgents/org.lonkar.notify.plist runs this very binary with
+/// ~/Library/LaunchAgents/org.lonkar.snotify.plist runs this very binary with
 /// --resident at login. A plist rather than SMAppService so the install is a
-/// file anyone can read and `launchctl print gui/$UID/org.lonkar.notify` says
+/// file anyone can read and `launchctl print gui/$UID/org.lonkar.snotify` says
 /// what state it is in.
 enum LoginAgent {
     static let label = bundleID
@@ -164,9 +164,9 @@ final class StatusItem: NSObject, NSMenuDelegate {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Notify")
+            button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Snotify")
             button.image?.isTemplate = true
-            button.setAccessibilityLabel("Notify")
+            button.setAccessibilityLabel("Snotify")
         }
         menu.delegate = self
         item.menu = menu
@@ -209,6 +209,6 @@ final class StatusItem: NSObject, NSMenuDelegate {
             menu.addItem(mi)
         }
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Notify", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit Snotify", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 }

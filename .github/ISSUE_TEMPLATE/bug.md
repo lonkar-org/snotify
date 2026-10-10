@@ -8,9 +8,9 @@ labels: bug
 
 - macOS version:
 - How you installed it (brew, DMG, `just install`):
-- Notify version (`/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' /Applications/Notify.app/Contents/Info.plist`):
+- Snotify version (`/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' /Applications/Snotify.app/Contents/Info.plist`):
 
-<details><summary>For the Claude Code hook: <code>notify-claude status</code> and the hook lines from <code>claude --debug</code></summary>
+<details><summary>For the Claude Code hook: <code>snotify-claude status</code> and the hook lines from <code>claude --debug</code></summary>
 
 ```text
 paste here

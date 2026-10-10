@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016  # backticks in printf formats are Markdown, not expansions
-# notify-claude - a Claude Code hook: notify through Notify.app when a turn ends,
+# snotify-claude - a Claude Code hook: notify through Snotify.app when a turn ends,
 # for the sessions that asked.
 #
 # Usage, as Claude Code hooks (hooks/hooks.json when installed as the plugin,
 # or the same four entries in ~/.claude/settings.json by hand):
-#   notify-claude prompt   UserPromptSubmit: reads the hook's JSON on stdin; a
+#   snotify-claude prompt   UserPromptSubmit: reads the hook's JSON on stdin; a
 #                          prompt that is `/notify` (or starts with it, with
 #                          `notify me`, or with the plugin's spelling
-#                          `/notification-companion:notify`) arms this session,
+#                          `/snotify:notify`) arms this session,
 #                          `/notify off` disarms
-#   notify-claude stop     Stop: reads the JSON; if the session is armed, posts
+#   snotify-claude stop     Stop: reads the JSON; if the session is armed, posts
 #                          the notification and disarms
-#   notify-claude asked    Notification (permission_prompt, agent_needs_input,
+#   snotify-claude asked    Notification (permission_prompt, agent_needs_input,
 #                          elicitation) and PreToolUse AskUserQuestion: if the
 #                          session is armed, posts "Claude asks" and stays armed
 # and by hand, or from the /notify skill as a fallback:
-#   notify-claude arm [SESSION_ID] [TEXT]  arm (the id defaults to $CLAUDE_SESSION_ID)
-#   notify-claude disarm [SESSION_ID]
-#   notify-claude status                   list the armed sessions
+#   snotify-claude arm [SESSION_ID] [TEXT]  arm (the id defaults to $CLAUDE_SESSION_ID)
+#   snotify-claude disarm [SESSION_ID]
+#   snotify-claude status                   list the armed sessions
 #
 # The text after /notify, if any, is the banner's own words: `body`,
 # `subject | body`, or `subject -` for your subject over Claude's message.
@@ -26,7 +26,7 @@
 # first line of Claude's last message.
 #
 # Typed while Claude is working, /notify reaches the transcript as an attachment,
-# and the turn that ends next is the work: notify. Typed while Claude is idle, it
+# and the turn that ends next is the work: snotify. Typed while Claude is idle, it
 # is a user message of its own, so the turn that ends next is the one that merely
 # acknowledged it: stay armed, the work comes with the next prompt. The Stop hook
 # tells the two apart by the last real user message in the transcript.
@@ -36,25 +36,25 @@
 # TERM_PROGRAM named when the session was armed (Ghostty, iTerm, Terminal,
 # WezTerm, kitty, VS Code), else the app LaunchServices stamped on the
 # environment as __CFBundleIdentifier, which is what survives tmux, where
-# TERM_PROGRAM only says tmux. NOTIFY_CLAUDE_TERMINAL overrides both with an
+# TERM_PROGRAM only says tmux. SNOTIFY_CLAUDE_TERMINAL overrides both with an
 # app name for `open -a` or a bundle id for `open -b`. Its Info button shows
 # the last thing Claude said, in full, as Markdown.
 #
 # The banner is sent --from "Claude Code" with a robot glyph, teal for a finish
 # and orange for a question, and --meta carries the session id, the project and
-# the pane, so `notify history from:claude` or `project:myrepo` finds it.
+# the pane, so `snotify history from:claude` or `project:myrepo` finds it.
 #
 # Needs jq, for the hook events and the transcript.
 set -euo pipefail
 
 self=${0##*/}
 here=$(cd -- "$(dirname -- "$0")" && pwd)
-notify=$here/notify
-[[ -x $notify ]] || notify=$HOME/.local/bin/notify
-state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/notify/claude
+snotify=$here/snotify
+[[ -x $snotify ]] || snotify=$HOME/.local/bin/snotify
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/snotify/claude
 # Seconds. A /notify this soon after a Stop was queued behind that work, and a
 # queued /notify's banner waits this long for a further queued prompt to start.
-grace=${NOTIFY_CLAUDE_GRACE:-3}
+grace=${SNOTIFY_CLAUDE_GRACE:-3}
 
 die() { printf '%s: error: %s\n' "$self" "$1" >&2; exit 1; }
 
@@ -71,7 +71,7 @@ flag() { printf '%s/%s' "$state_dir" "$1"; }
 # (anything with a dot) for `open -b`. Empty when nothing says which terminal
 # this is, and then the click only switches tmux.
 terminal_app() {
-  if [[ -n ${NOTIFY_CLAUDE_TERMINAL:-} ]]; then printf '%s' "$NOTIFY_CLAUDE_TERMINAL"; return; fi
+  if [[ -n ${SNOTIFY_CLAUDE_TERMINAL:-} ]]; then printf '%s' "$SNOTIFY_CLAUDE_TERMINAL"; return; fi
   case ${TERM_PROGRAM:-} in
     ghostty) printf Ghostty; return ;;
     iTerm.app) printf iTerm; return ;;
@@ -82,7 +82,7 @@ terminal_app() {
     Alacritty|alacritty) printf Alacritty; return ;;
   esac
   case ${__CFBundleIdentifier:-} in
-    ""|org.lonkar.notify) printf '' ;;
+    ""|org.lonkar.snotify) printf '' ;;
     *) printf '%s' "$__CFBundleIdentifier" ;;
   esac
 }
@@ -211,7 +211,7 @@ post_banner() { # post_banner SID CWD REPLY
   disarm "$sid"
   local -a who
   identity teal "$sid" "$project" "$pane"
-  "$notify" --title "$title" --body "$body" --sound Glass "${who[@]}" \
+  "$snotify" --title "$title" --body "$body" --sound Glass "${who[@]}" \
     --group "claude-$sid" ${click:+--on-click "$click"} --info-file "$info" >/dev/null 2>&1 || true
 }
 
@@ -236,7 +236,7 @@ case ${1:-} in
     printf '%s\n' "$pid" > "$state_dir/$session.last"
     text=""
     case $prompt in
-      # Installed as the plugin the skill is /notification-companion:notify, so
+      # Installed as the plugin the skill is /snotify:notify, so
       # any one-word prefix before the colon is accepted.
       "/notify off"*|"notify me off"*|"/"*":notify off"*) disarm "$session"; exit 0 ;;
       "/notify"|"/notify "*) text=${prompt#/notify} ;;
@@ -334,7 +334,7 @@ case ${1:-} in
     } > "$info"
     click=$(click_command "$pane" "$terminal")
     identity orange "$session" "$project" "$pane"
-    "$notify" --title "Claude asks in $project" --body "${question:0:140}" --sound Glass "${who[@]}" \
+    "$snotify" --title "Claude asks in $project" --body "${question:0:140}" --sound Glass "${who[@]}" \
       --group "claude-$session" ${click:+--on-click "$click"} --info-file "$info" >/dev/null 2>&1 || true
     ;;
   arm)

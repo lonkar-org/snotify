@@ -1,6 +1,6 @@
 // HistoryWindow.swift - the main window: a search field over every history
 // entry, a list of them, and the selected one rendered in full. Opened by a
-// double-click on Notify.app, the menu bar item, `notify show [QUERY]`, or
+// double-click on Snotify.app, the menu bar item, `snotify show [QUERY]`, or
 // Cmd-Y, and it reloads when the history directory changes.
 
 import AppKit
@@ -25,7 +25,7 @@ final class HistoryWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NS
         window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .miniaturizable],
                           backing: .buffered, defer: false)
         super.init()
-        window.title = "Notify History"
+        window.title = "Snotify History"
         window.delegate = self
         window.minSize = NSSize(width: 600, height: 320)
         window.setFrameAutosaveName("NotifyHistory")
@@ -305,7 +305,7 @@ final class HistoryWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NS
         p.arguments = ["-c", command]
         p.environment = env
         if let cwd = e["sender.cwd"], FileManager.default.fileExists(atPath: cwd) { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-        do { try p.run() } catch { NSLog("Notify: on-click failed: %@", error.localizedDescription) }
+        do { try p.run() } catch { NSLog("Snotify: on-click failed: %@", error.localizedDescription) }
     }
 
     @objc func revealFile() {

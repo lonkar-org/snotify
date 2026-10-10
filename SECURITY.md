@@ -10,7 +10,7 @@ upgrading is the fix.
 Please don't open a public issue for it. Report it privately through GitHub
 instead:
 
-<https://github.com/lonkar-org/notification-companion/security/advisories/new>
+<https://github.com/lonkar-org/snotify/security/advisories/new>
 
 Tell me what you found, your macOS version, how you installed it, and the
 steps to reproduce it.
@@ -33,9 +33,9 @@ Things I'd especially like to hear about:
   `/bin/sh` when the banner is clicked. Anything that lets text from a title,
   a body or an Info file end up in that command, or lets another process
   change what a pending click will run.
-- The Info files under `~/.local/state/notify`: another local user reading
+- The Info files under `~/.local/state/snotify`: another local user reading
   them, or a path in `--info-file` writing or reading outside that directory.
-- `notify-claude`: the hook reads Claude Code's transcript and hook events
+- `snotify-claude`: the hook reads Claude Code's transcript and hook events
   with `jq` and builds a shell command from the tmux pane and terminal name
   it recorded. Anything in a transcript or a prompt that changes that command.
 - The release pipeline: the DMG, the checksum and the cask.
@@ -43,4 +43,4 @@ Things I'd especially like to hear about:
 Out of scope: anything that needs an attacker who is already your user on
 your machine, and bugs in macOS's notification centre, tmux or your terminal
 themselves. Report those upstream, though I'm glad to hear about them if
-Notify makes them worse.
+Snotify makes them worse.

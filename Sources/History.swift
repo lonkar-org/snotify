@@ -1,5 +1,5 @@
 // History.swift - one Markdown file per notification under
-// $XDG_STATE_HOME/notify/history: YAML frontmatter with everything known about
+// $XDG_STATE_HOME/snotify/history: YAML frontmatter with everything known about
 // the post (when, what, who sent it, from where, what happened to it after),
 // then the Info Markdown as the body. The file is the Info file too, so nothing
 // is kept twice, and `rg` over the directory is already a search.
@@ -79,7 +79,7 @@ struct HistoryEntry {
     func write() {
         try? FileManager.default.createDirectory(atPath: historyDir, withIntermediateDirectories: true)
         do { try render().write(toFile: path, atomically: true, encoding: .utf8) }
-        catch { NSLog("Notify: cannot write %@: %@", path, error.localizedDescription) }
+        catch { NSLog("Snotify: cannot write %@: %@", path, error.localizedDescription) }
     }
 
     /// Drop entries older than `days`; 0 keeps everything. Compares the name's
@@ -251,8 +251,8 @@ struct HistoryEntry {
 
 // MARK: - Who sent it
 
-/// What the kernel knows about the process that ran `notify`: this app is
-/// exec'd by the bin/notify wrapper, so our parent is the script or shell that
+/// What the kernel knows about the process that ran `snotify`: this app is
+/// exec'd by the bin/snotify wrapper, so our parent is the script or shell that
 /// called it. Read at post time; nothing here needs a flag.
 enum Sender {
     static func kinfo(_ pid: pid_t) -> kinfo_proc? {

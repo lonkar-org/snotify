@@ -1,18 +1,18 @@
 {
-  "name": "notification-companion",
+  "name": "snotify",
   "owner": {
     "name": "Yogesh Lonkar",
     "email": "yogesh@lonkar.org"
   },
   "metadata": {
-    "description": "The notify-claude hooks and the /notify skill, from the repository that builds Notify.app.",
+    "description": "The snotify-claude hooks and the /notify skill, from the repository that builds Snotify.app.",
     "version": "1.0.0"
   },
   "plugins": [
     {
-      "name": "notification-companion",
+      "name": "snotify",
       "source": "./",
-      "description": "A desktop banner when Claude Code finishes or stops to ask: /notify arms the session, the click jumps to the tmux pane, Info shows the last message. Needs Notify.app from the same repository.",
+      "description": "A desktop banner when Claude Code finishes or stops to ask: /notify arms the session, the click jumps to the tmux pane, Info shows the last message. Needs Snotify.app from the same repository.",
       "category": "productivity",
       "keywords": [
         "notification",

@@ -3,7 +3,7 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/notify-claude\" prompt" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/snotify-claude\" prompt" }
         ]
       }
     ],
@@ -11,7 +11,7 @@
       {
         "matcher": "permission_prompt|agent_needs_input|elicitation_dialog|elicitation_url_dialog",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/notify-claude\" asked" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/snotify-claude\" asked" }
         ]
       }
     ],
@@ -19,14 +19,14 @@
       {
         "matcher": "AskUserQuestion",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/notify-claude\" asked" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/snotify-claude\" asked" }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/notify-claude\" stop" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/snotify-claude\" stop" }
         ]
       }
     ]
