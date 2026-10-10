@@ -89,6 +89,11 @@ jobs:
           hdiutil verify dist/Notify-*.dmg
           test -x dist/Notify.app/Contents/Resources/bin/notify
           test -f dist/Notify.app/Contents/Resources/skills/notify/SKILL.md
+          test -f dist/Notify.app/Contents/Resources/nerd-fonts/SymbolsNerdFontMono-Regular.ttf
+      # The history, search, icons, config and the window, against the built
+      # app. The runner has no notification permission, so the posts exit 3
+      # and the suite checks the entries that records.
+      - run: scripts/notify-app-test.sh dist/Notify.app
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Notify-dmg

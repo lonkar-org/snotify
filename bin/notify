@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # notify - a desktop notification from a script, under Notify.app's own name.
+# The client every script uses; Notify.app does the posting and keeps the history.
 #
 # Usage: notify --title TITLE [--body BODY] [--subtitle TEXT] [--sound NAME|default]
 #               [--group KEY] [--on-click 'shell command']
 #               [--info-file PATH.md | --info-md 'markdown']
+#               [--from LABEL] [--icon GLYPH] [--color COLOR] [--meta KEY=VALUE]...
+#        notify history [QUERY...] [--since 7d] [--limit N] [--json | --paths]
+#        notify show [QUERY...]          open the history window
+#        notify config [KEY [VALUE]]     menubar, dock, login on|off; retention DAYS
+#        notify icons [QUERY] [--png OUT.png]
 #   --sound      a system sound by name (Basso, Pop, Glass... see
 #                /System/Library/Sounds), or default; silent when absent
 #   --group      a repeat with the same key replaces the earlier banner
@@ -12,21 +18,33 @@
 #   --info-file  Markdown behind an Info button on the banner (hover the
 #                banner for it); the window shows it, selectable, links
 #                live, with a Copy button. - reads it from stdin.
-#   --info-md    the same, given inline; kept under ~/.local/state/notify
+#   --info-md    the same, given inline
+#   --from       who is sending, as the history and the menu bar show it
+#   --icon       a Nerd Fonts glyph name (fa-rocket, md-robot; `notify icons
+#                rocket` searches), sf:NAME for an SF Symbol, U+F135, or one
+#                character; shown on the banner and in the history
+#   --color      the icon's colour: red orange yellow green mint teal cyan
+#                blue indigo purple pink brown gray, or #rrggbb
+#   --meta       KEY=VALUE kept with the history entry; repeatable
 #
 # Exit 0 posted, 2 usage, 3 notifications are turned off for Notify.app.
+#
+# Every post is one Markdown file under ~/.local/state/notify/history, its
+# metadata as frontmatter (when, who sent it and from where, what was clicked)
+# and the Info text as the body; `notify history` and the window search them.
 #
 # The app is looked for as NOTIFY_APP, then the bundle this script sits inside
 # (a cask links Contents/Resources/bin/notify onto PATH), then
 # ~/Applications/Notify.app (`just install`) and /Applications/Notify.app (the
 # DMG). Without one this falls back to osascript on macOS and notify-send
-# elsewhere, with the title, body and sound only: a click then does nothing.
+# elsewhere, with the title, body and sound only: a click then does nothing,
+# nothing is kept, and the subcommands say so.
 set -euo pipefail
 
 self=${0##*/}
 here=$(cd -- "$(dirname -- "$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")")" && pwd)
 
-usage() { sed -n '4,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '5,30p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 bin=""
 for app in "${NOTIFY_APP:-}" "$here/../../.." "$HOME/Applications/Notify.app" /Applications/Notify.app; do
@@ -38,13 +56,18 @@ if [[ -n $bin && $(uname -s) == Darwin ]]; then
   exec "$bin" "$@"
 fi
 
+case ${1:-} in
+  history|show|config|icons)
+    printf '%s: %s needs Notify.app, which is not installed; see https://github.com/lonkar-org/notification-companion\n' "$self" "$1" >&2
+    exit 1 ;;
+esac
 title="" body="" sound=""
 while (( $# )); do
   case $1 in
     --title) title=${2:-}; shift 2 ;;
     --body) body=${2:-}; shift 2 ;;
     --sound) sound=${2:-}; shift 2 ;;
-    --subtitle|--group|--on-click|--info-file|--info-md) shift 2 ;;
+    --subtitle|--group|--on-click|--info-file|--info-md|--from|--icon|--color|--meta) shift 2 ;;
     -h|--help) usage ;;
     *) printf '%s: unknown argument %s\n' "$self" "$1" >&2; usage ;;
   esac

@@ -34,8 +34,15 @@
 # The banner's click jumps the attached tmux client to the pane Claude ran in
 # (TMUX_PANE at arming time) and brings the terminal forward: the one
 # TERM_PROGRAM named when the session was armed (Ghostty, iTerm, Terminal,
-# WezTerm, kitty, VS Code), or NOTIFY_CLAUDE_TERMINAL, an app name for `open -a`.
-# Its Info button shows the last thing Claude said, in full, as Markdown.
+# WezTerm, kitty, VS Code), else the app LaunchServices stamped on the
+# environment as __CFBundleIdentifier, which is what survives tmux, where
+# TERM_PROGRAM only says tmux. NOTIFY_CLAUDE_TERMINAL overrides both with an
+# app name for `open -a` or a bundle id for `open -b`. Its Info button shows
+# the last thing Claude said, in full, as Markdown.
+#
+# The banner is sent --from "Claude Code" with a robot glyph, teal for a finish
+# and orange for a question, and --meta carries the session id, the project and
+# the pane, so `notify history from:claude` or `project:myrepo` finds it.
 #
 # Needs jq, for the hook events and the transcript.
 set -euo pipefail
@@ -60,19 +67,23 @@ read_event() {
 
 flag() { printf '%s/%s' "$state_dir" "$1"; }
 
-# The app to bring forward on a click, as `open -a` wants it. Empty when the
-# terminal is not one of the known ones, and then the click only switches tmux.
+# The app to bring forward on a click: a name for `open -a`, or a bundle id
+# (anything with a dot) for `open -b`. Empty when nothing says which terminal
+# this is, and then the click only switches tmux.
 terminal_app() {
   if [[ -n ${NOTIFY_CLAUDE_TERMINAL:-} ]]; then printf '%s' "$NOTIFY_CLAUDE_TERMINAL"; return; fi
   case ${TERM_PROGRAM:-} in
-    ghostty) printf Ghostty ;;
-    iTerm.app) printf iTerm ;;
-    Apple_Terminal) printf Terminal ;;
-    WezTerm) printf WezTerm ;;
-    kitty) printf kitty ;;
-    vscode) printf 'Visual Studio Code' ;;
-    Alacritty|alacritty) printf Alacritty ;;
-    *) printf '' ;;
+    ghostty) printf Ghostty; return ;;
+    iTerm.app) printf iTerm; return ;;
+    Apple_Terminal) printf Terminal; return ;;
+    WezTerm) printf WezTerm; return ;;
+    kitty) printf kitty; return ;;
+    vscode) printf 'Visual Studio Code'; return ;;
+    Alacritty|alacritty) printf Alacritty; return ;;
+  esac
+  case ${__CFBundleIdentifier:-} in
+    ""|org.lonkar.notify) printf '' ;;
+    *) printf '%s' "$__CFBundleIdentifier" ;;
   esac
 }
 
@@ -81,9 +92,21 @@ terminal_app() {
 click_command() { # click_command PANE TERMINAL
   local parts=()
   [[ -n $1 ]] && parts+=("tmux switch-client -t '$1'")
-  [[ -n $2 ]] && parts+=("open -a '$2'")
+  if [[ -n $2 ]]; then
+    if [[ $2 == *.* ]]; then parts+=("open -b '$2'"); else parts+=("open -a '$2'"); fi
+  fi
   local IFS=';'
   printf '%s' "${parts[*]}"
+}
+
+# What every banner from here carries, for the history: who, which glyph, and
+# the ids a search wants. identity COLOR SID PROJECT PANE fills the array
+# `who`; an array rather than a printed list because macOS ships bash 3.2,
+# which has no mapfile.
+identity() {
+  who=(--from "Claude Code" --icon md-robot --color "$1" --meta "claude_session=$2" --meta "project=$3")
+  [[ -n $4 ]] && who+=(--meta "tmux_pane=$4")
+  return 0
 }
 
 # The text after /notify: `body`, `subject | body`, or `subject -`, where the
@@ -186,7 +209,9 @@ post_banner() { # post_banner SID CWD REPLY
   } > "$info"
   click=$(click_command "$pane" "$terminal")
   disarm "$sid"
-  "$notify" --title "$title" --body "$body" --sound Glass \
+  local -a who
+  identity teal "$sid" "$project" "$pane"
+  "$notify" --title "$title" --body "$body" --sound Glass "${who[@]}" \
     --group "claude-$sid" ${click:+--on-click "$click"} --info-file "$info" >/dev/null 2>&1 || true
 }
 
@@ -308,7 +333,8 @@ case ${1:-} in
       printf -- '- Session: `%s`\n' "$session"
     } > "$info"
     click=$(click_command "$pane" "$terminal")
-    "$notify" --title "Claude asks in $project" --body "${question:0:140}" --sound Glass \
+    identity orange "$session" "$project" "$pane"
+    "$notify" --title "Claude asks in $project" --body "${question:0:140}" --sound Glass "${who[@]}" \
       --group "claude-$session" ${click:+--on-click "$click"} --info-file "$info" >/dev/null 2>&1 || true
     ;;
   arm)

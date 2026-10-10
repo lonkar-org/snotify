@@ -63,8 +63,15 @@ die() { printf '%s: error: %s\n' "$self" "$1" >&2; exit 1; }
 
 [[ $(uname -s) == Darwin ]] || die "macOS only"
 [[ -f $src/main.swift && -f $src/icon.swift ]] || die "sources missing under $src"
+[[ -f $root/Resources/nerd-fonts/SymbolsNerdFontMono-Regular.ttf ]] || die "Resources/nerd-fonts is missing; run scripts/fetch-nerd-font.sh"
 
-source_hash() { cat "$src/main.swift" "$src/icon.swift" "$0" | shasum -a 256 | cut -d' ' -f1; }
+# Every Swift file, the vendored font index and this script: what the bundle is
+# built from, so `status` notices a change to any of them.
+source_hash() { cat "$src"/*.swift "$root/Resources/nerd-fonts/glyphnames.json" "$0" | shasum -a 256 | cut -d' ' -f1; }
+
+# The app is every Swift file but icon.swift, which is the build-time tool that
+# draws the icon set and has its own top-level code.
+app_sources() { find "$src" -name '*.swift' ! -name icon.swift | sort; }
 
 # The version for Info.plist: the argument, else the nearest tag without its v,
 # else 0.0.0. CFBundleVersion has to be dotted digits, so a -dirty or -3-gabc
@@ -86,8 +93,9 @@ build_app() { # build_app DIR [VERSION]  -> DIR/Notify.app
   command -v swiftc >/dev/null 2>&1 || die "swiftc not found; install the Xcode command line tools"
   rm -rf "$stage"
   mkdir -p "$stage/Contents/MacOS" "$stage/Contents/Resources"
-  swiftc -O -swift-version 5 -framework AppKit -framework UserNotifications \
-    -o "$stage/Contents/MacOS/Notify" "$src/main.swift"
+  # shellcheck disable=SC2046  # the file list is one path per line, none with spaces
+  swiftc -O -swift-version 5 -framework AppKit -framework UserNotifications -framework CoreText \
+    -o "$stage/Contents/MacOS/Notify" $(app_sources)
   swiftc -O -swift-version 5 -framework AppKit -o "$tmp/icon" "$src/icon.swift"
   "$tmp/icon" "$tmp/Notify.iconset"
   iconutil -c icns "$tmp/Notify.iconset" -o "$stage/Contents/Resources/Notify.icns"
@@ -98,6 +106,8 @@ build_app() { # build_app DIR [VERSION]  -> DIR/Notify.app
   cp "$wrapper" "$claude_hook" "$stage/Contents/Resources/bin/"
   cp -R "$skill" "$stage/Contents/Resources/skills/"
   cp "$root/LICENSE" "$stage/Contents/Resources/"
+  # Symbols Nerd Font Mono and its name index, for --icon; MIT, licence beside it.
+  cp -R "$root/Resources/nerd-fonts" "$stage/Contents/Resources/nerd-fonts"
   cat > "$stage/Contents/Info.plist" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

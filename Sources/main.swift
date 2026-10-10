@@ -1,30 +1,48 @@
-// Notify.app - one macOS notification from the command line, under this app's
-// own name and icon, with a shell command to run when it is clicked and an
-// optional Info button that opens a window of Markdown the script supplied.
+// Notify.app - macOS notifications from the command line, under this app's own
+// name and icon, with a shell command to run when a banner is clicked, an Info
+// button that opens a window of Markdown the script supplied, and a history of
+// every post that the same window searches.
 //
 // Built and installed by scripts/notify-app.sh; called through bin/notify,
-// which is the documented interface. Launched with arguments it posts and
-// exits. Launched with none, which is what macOS does when a notification of
-// ours is clicked after the posting process has gone, it waits for the click
-// to be delivered, acts on it, and exits.
+// which is the client every script uses. Launched with --title it posts and
+// exits. Launched with a subcommand (history, show, config, icons) it does that
+// and exits, or opens the history window. Launched with --resident, by the
+// LaunchAgent `notify config login on` writes, it stays: menu bar item and Dock
+// icon as configured, and takes the clicks. Launched with nothing, which is
+// what macOS does for a click when no instance is running and what a double
+// click in Finder does, it waits a moment for the click and otherwise opens
+// the history window.
 //
 // The PATH of the caller travels inside the notification: a click arrives in a
 // process started by launchd, whose PATH has no Homebrew or ~/.local/bin, and
 // `tmux` or `open -a` must still resolve.
 //
-// Info text is kept as a file under ~/.local/state/notify, not in userInfo:
-// a log tail can be large and the notification store is not for that. The
-// window is an NSTextView, so VoiceOver reads it, text selects, links open.
+// Every post is a Markdown file under ~/.local/state/notify/history with its
+// metadata as frontmatter and the Info text as body (History.swift). The
+// banner's Info button and the history window both read that file.
 
 import AppKit
 import UserNotifications
 
 let usage = """
-usage: Notify --title TITLE [--body BODY] [--subtitle TEXT] [--sound NAME|default]
+usage: notify --title TITLE [--body BODY] [--subtitle TEXT] [--sound NAME|default]
               [--group KEY] [--on-click 'shell command']
               [--info-file PATH.md | --info-md 'markdown']
-       Notify --show-info PATH.md [--title TITLE] [--snapshot OUT.png]
-              open the window directly; --snapshot writes it to a PNG and exits
+              [--from LABEL] [--icon GLYPH] [--color COLOR] [--meta KEY=VALUE]...
+       notify history [QUERY...] [--since 7d|2026-10-01] [--limit N] [--json | --paths]
+       notify show [QUERY...] [--snapshot OUT.png]
+                                           open the history window; --snapshot writes it to a PNG and exits
+       notify config [KEY [VALUE]]         menubar, dock, login: on|off; retention: DAYS|forever
+       notify icons [QUERY] [--png OUT.png [--color COLOR]]
+                                           search the glyph names; --png renders the first match
+       notify --show-info PATH.md [--title TITLE] [--snapshot OUT.png]
+
+  --from    who is sending, as the history and the menu bar show it
+  --icon    a Nerd Fonts name (fa-rocket, md-robot), sf:NAME for an SF Symbol,
+            U+F135 for a codepoint, or one character; shown on the banner
+  --color   red orange yellow green mint teal cyan blue indigo purple pink
+            brown gray, or #rrggbb; the icon's colour
+  --meta    anything else worth keeping with the entry, repeatable
 """
 
 let bundleID = "org.lonkar.notify"
@@ -33,7 +51,12 @@ let infoAction = "info"
 let stateDir = (ProcessInfo.processInfo.environment["XDG_STATE_HOME"].map { $0 + "/notify" }
     ?? NSHomeDirectory() + "/.local/state/notify")
 
+enum Mode {
+    case launched, post, showInfo, history, show, config, icons, resident
+}
+
 struct Options {
+    var mode = Mode.launched
     var title = ""
     var body = ""
     var subtitle: String?
@@ -44,6 +67,18 @@ struct Options {
     var infoMarkdown: String?
     var showInfo: String?
     var snapshot: String?
+    var from: String?
+    var icon: String?
+    var color: String?
+    var meta: [(key: String, value: String)] = []
+    var query: [String] = []
+    var since: String?
+    var limit = 20
+    var json = false
+    var paths = false
+    var configKey: String?
+    var configValue: String?
+    var png: String?
 }
 
 func fail(_ message: String, code: Int32) -> Never {
@@ -51,11 +86,19 @@ func fail(_ message: String, code: Int32) -> Never {
     exit(code)
 }
 
-func parse(_ args: [String]) -> Options? {
+func parse(_ args: [String]) -> Options {
     // No arguments means a launch by macOS for a click, or by hand.
-    let args = args.filter { !$0.hasPrefix("-psn_") }
-    if args.isEmpty { return nil }
+    var args = args.filter { !$0.hasPrefix("-psn_") }
     var o = Options()
+    if args.isEmpty { return o }
+    switch args[0] {
+    case "history": o.mode = .history; args.removeFirst()
+    case "show": o.mode = .show; args.removeFirst()
+    case "config": o.mode = .config; args.removeFirst()
+    case "icons": o.mode = .icons; args.removeFirst()
+    case "--resident": o.mode = .resident; args.removeFirst()
+    default: o.mode = .post
+    }
     var i = 0
     func value(_ flag: String) -> String {
         i += 1
@@ -73,207 +116,43 @@ func parse(_ args: [String]) -> Options? {
         case "--on-click": o.onClick = value(a)
         case "--info-file": o.infoFile = value(a)
         case "--info-md": o.infoMarkdown = value(a)
-        case "--show-info": o.showInfo = value(a)
+        case "--show-info": o.showInfo = value(a); o.mode = .showInfo
         case "--snapshot": o.snapshot = value(a)
+        case "--from": o.from = value(a)
+        case "--icon": o.icon = value(a)
+        case "--color": o.color = value(a)
+        case "--meta":
+            let kv = value(a)
+            guard let eq = kv.firstIndex(of: "="), eq != kv.startIndex else { fail("--meta wants KEY=VALUE, not \(kv)", code: 2) }
+            o.meta.append((String(kv[..<eq]), String(kv[kv.index(after: eq)...])))
+        case "--since": o.since = value(a)
+        case "--limit":
+            guard let n = Int(value(a)), n >= 0 else { fail("--limit wants a number", code: 2) }
+            o.limit = n
+        case "--json": o.json = true
+        case "--paths": o.paths = true
+        case "--png": o.png = value(a)
         case "-h", "--help": print(usage); exit(0)
-        default: fail("unknown argument \(a)\n" + usage, code: 2)
+        default:
+            if a.hasPrefix("-") { fail("unknown argument \(a)\n" + usage, code: 2) }
+            switch o.mode {
+            case .config:
+                if o.configKey == nil { o.configKey = a } else if o.configValue == nil { o.configValue = a } else { fail("config takes a key and a value, nothing more", code: 2) }
+            case .history, .show, .icons: o.query.append(a)
+            default: fail("unexpected argument \(a)\n" + usage, code: 2)
+            }
         }
         i += 1
     }
-    if o.title.isEmpty && o.showInfo == nil { fail("--title is required\n" + usage, code: 2) }
+    if o.mode == .post && o.title.isEmpty { fail("--title is required\n" + usage, code: 2) }
+    if let c = o.color, parseColor(c) == nil { fail("--color \(c) is not a colour name or #rrggbb", code: 2) }
+    if let s = o.icon, IconSpec(s) == nil { fail("--icon \(s) is not a glyph name, sf:NAME, U+XXXX or one character; `notify icons QUERY` searches the names", code: 2) }
     return o
 }
 
-// MARK: - Markdown to attributed text
-
-// AttributedString(markdown:) parses the structure but styles nothing, so each
-// run is dressed by the block and inline intents it carries. Blocks are
-// separated here, as the parser drops the newlines between them.
-func styled(markdown: String) -> NSAttributedString {
-    let base = NSFont.systemFont(ofSize: 13)
-    let mono = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    let parsed: AttributedString
-    do {
-        parsed = try AttributedString(markdown: markdown, options: .init(
-            allowsExtendedAttributes: true, interpretedSyntax: .full,
-            failurePolicy: .returnPartiallyParsedIfPossible))
-    } catch {
-        return NSAttributedString(string: markdown, attributes: [.font: mono, .foregroundColor: NSColor.labelColor])
-    }
-    let out = NSMutableAttributedString()
-    var lastBlock: Int? = nil
-    var lastItem: Int? = nil
-    var lastCell: Int? = nil
-    var lastRow: Int? = nil
-    for run in parsed.runs {
-        let text = String(parsed[run.range].characters)
-        var font = base
-        var color = NSColor.labelColor
-        var background: NSColor? = nil
-        let para = NSMutableParagraphStyle()
-        para.paragraphSpacing = 6
-        var prefix = ""
-        var separator = ""
-        var isCode = false
-        if let intent = run.presentationIntent {
-            // components run innermost first; the innermost is the block
-            // whose text this is, and a change of it is a block boundary.
-            let block = intent.components.first?.identity
-            var item: Int? = nil, cell: Int? = nil, row: Int? = nil
-            var listOrdinal: Int? = nil
-            var inList = false
-            for comp in intent.components {
-                switch comp.kind {
-                case .header(let level):
-                    font = NSFont.boldSystemFont(ofSize: level == 1 ? 19 : level == 2 ? 16 : 14)
-                    para.paragraphSpacingBefore = 8
-                case .codeBlock:
-                    font = mono; isCode = true
-                    background = NSColor.quaternaryLabelColor.withAlphaComponent(0.12)
-                    para.headIndent = 8; para.firstLineHeadIndent = 8
-                case .listItem(let ordinal):
-                    item = comp.identity; listOrdinal = ordinal
-                    para.headIndent = 20; para.firstLineHeadIndent = 4
-                case .unorderedList: inList = true
-                case .orderedList: inList = true
-                case .blockQuote:
-                    color = .secondaryLabelColor
-                    para.headIndent = 14; para.firstLineHeadIndent = 14
-                case .tableCell: cell = comp.identity
-                case .tableRow: row = comp.identity
-                case .tableHeaderRow: row = comp.identity; font = NSFont.boldSystemFont(ofSize: 13)
-                case .thematicBreak: break
-                default: break
-                }
-            }
-            if row != nil {
-                if row != lastRow { separator = out.length > 0 ? "\n" : "" }
-                else if cell != lastCell { separator = "  |  " }
-            } else if block != lastBlock, out.length > 0 {
-                separator = "\n"
-            }
-            if let item = item, item != lastItem, let ordinal = listOrdinal {
-                prefix = inList && listOrdinal != nil && isOrdered(intent) ? "\(ordinal). " : "•  "
-            }
-            lastBlock = block; lastItem = item; lastCell = cell; lastRow = row
-        }
-        if let inline = run.inlinePresentationIntent {
-            if inline.contains(.code) { font = mono; background = NSColor.quaternaryLabelColor.withAlphaComponent(0.12) }
-            if inline.contains(.stronglyEmphasized) {
-                font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
-            }
-            if inline.contains(.emphasized) {
-                font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
-            }
-        }
-        var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: para]
-        if let b = background { attrs[.backgroundColor] = b }
-        if let link = run.link { attrs[.link] = link; attrs[.foregroundColor] = NSColor.linkColor }
-        if !separator.isEmpty { out.append(NSAttributedString(string: separator, attributes: [.font: base, .paragraphStyle: para])) }
-        if !prefix.isEmpty { out.append(NSAttributedString(string: prefix, attributes: attrs)) }
-        out.append(NSAttributedString(string: isCode ? text.trimmingCharacters(in: .newlines) : text, attributes: attrs))
-    }
-    return out
-}
-
-func isOrdered(_ intent: PresentationIntent) -> Bool {
-    intent.components.contains { if case .orderedList = $0.kind { return true } else { return false } }
-}
-
-// MARK: - The Info window
-
-final class InfoWindow: NSObject, NSWindowDelegate {
-    private var window: NSWindow!
-    private let raw: String
-
-    init(title: String, markdown: String) {
-        raw = markdown
-        super.init()
-        let frame = NSRect(x: 0, y: 0, width: 600, height: 440)
-        window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .miniaturizable],
-                          backing: .buffered, defer: false)
-        window.title = title
-        window.delegate = self
-        window.minSize = NSSize(width: 360, height: 200)
-        window.setFrameAutosaveName("NotifyInfo")
-
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .noBorder
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        let text = NSTextView()
-        text.isEditable = false
-        text.isSelectable = true
-        text.isRichText = true
-        text.drawsBackground = false
-        text.textContainerInset = NSSize(width: 14, height: 12)
-        text.isAutomaticLinkDetectionEnabled = true
-        text.linkTextAttributes = [.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue]
-        text.autoresizingMask = [.width]
-        text.isVerticallyResizable = true
-        text.isHorizontallyResizable = false
-        text.textContainer?.widthTracksTextView = true
-        text.textStorage?.setAttributedString(styled(markdown: markdown))
-        text.setAccessibilityLabel(title)
-        scroll.documentView = text
-
-        let copy = NSButton(title: "Copy", target: self, action: #selector(copyAll))
-        copy.bezelStyle = .rounded
-        copy.setAccessibilityLabel("Copy the whole text")
-        copy.translatesAutoresizingMaskIntoConstraints = false
-        let close = NSButton(title: "Close", target: window, action: #selector(NSWindow.performClose(_:)))
-        close.bezelStyle = .rounded
-        close.keyEquivalent = "\u{1b}"
-        close.translatesAutoresizingMaskIntoConstraints = false
-
-        let content = NSView(frame: frame)
-        content.addSubview(scroll)
-        content.addSubview(copy)
-        content.addSubview(close)
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: content.topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: copy.topAnchor, constant: -8),
-            copy.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
-            copy.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
-            close.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
-            close.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
-        ])
-        window.contentView = content
-        window.center()
-    }
-
-    func show() {
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-    }
-
-    // The window drawn by itself, for checking the rendering from a script.
-    // No screen capture is involved, so no Screen Recording permission.
-    func snapshot(to path: String) {
-        guard let view = window.contentView,
-              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { fail("cannot render", code: 1) }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { fail("cannot encode", code: 1) }
-        do { try png.write(to: URL(fileURLWithPath: path)) }
-        catch { fail("cannot write \(path): \(error.localizedDescription)", code: 1) }
-    }
-
-    @objc func copyAll() {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(raw, forType: .string)
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        DispatchQueue.main.async { exit(0) }
-    }
-}
-
-// Cmd-W, Cmd-C, Cmd-A and Cmd-Q only work with a menu bar to route them,
-// even for an app that never shows in the Dock.
-func installMenu() {
+// Cmd-W, Cmd-C, Cmd-A, Cmd-F, Cmd-Y and Cmd-Q only work with a menu bar to
+// route them, even for an app that never shows in the Dock.
+func installMenu(_ delegate: Delegate) {
     let main = NSMenu()
     let appItem = NSMenuItem(); main.addItem(appItem)
     let appMenu = NSMenu()
@@ -281,12 +160,16 @@ func installMenu() {
     appItem.submenu = appMenu
     let fileItem = NSMenuItem(); main.addItem(fileItem)
     let fileMenu = NSMenu(title: "File")
+    let history = fileMenu.addItem(withTitle: "History", action: #selector(Delegate.showHistory(_:)), keyEquivalent: "y")
+    history.target = delegate
     fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
     fileItem.submenu = fileMenu
     let editItem = NSMenuItem(); main.addItem(editItem)
     let editMenu = NSMenu(title: "Edit")
     editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
     editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+    let find = editMenu.addItem(withTitle: "Find", action: #selector(Delegate.findInHistory(_:)), keyEquivalent: "f")
+    find.target = delegate
     editItem.submenu = editMenu
     NSApp.mainMenu = main
 }
@@ -294,77 +177,262 @@ func installMenu() {
 // MARK: - App
 
 final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-    let options: Options?
+    let options: Options
     var infoWindow: InfoWindow?
+    var historyWindow: HistoryWindow?
+    var statusItem: StatusItem?
     var responded = false
-    init(options: Options?) { self.options = options }
+    /// Launched to stay: by the LaunchAgent, or because an icon is on.
+    var residentLaunch = false
+    var keepAlive: Bool { residentLaunch || Config.menubar || Config.dock }
+
+    init(options: Options) { self.options = options }
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        if let o = options, let path = o.showInfo {
-            openInfo(title: o.title.isEmpty ? (path as NSString).lastPathComponent : o.title, path: path)
+        let o = options
+        switch o.mode {
+        case .showInfo:
+            let path = o.showInfo ?? ""
+            openInfo(title: o.title.isEmpty ? (path as NSString).lastPathComponent : o.title, path: path, record: false)
             if let out = o.snapshot {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     self?.infoWindow?.snapshot(to: out)
                     exit(0)
                 }
             }
-        } else if let o = options {
+        case .post:
             post(o)
-        } else {
-            // A click launch delivers didReceive within a moment; a stray
-            // double-click in Finder delivers nothing, so don't linger.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-                if self?.responded != true { exit(0) }
+        case .history:
+            printHistory(o)
+            exit(0)
+        case .icons:
+            printIcons(o)
+            exit(0)
+        case .config:
+            runConfig(o)
+            exit(0)
+        case .show:
+            let q = o.query.joined(separator: " ")
+            if let other = IPC.otherInstance() {
+                IPC.post(IPC.show, ["query": q])
+                other.activate(options: [])
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
+                return
+            }
+            becomeResident(launched: false)
+            openHistory(query: q)
+            if let out = o.snapshot {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.historyWindow?.snapshot(to: out)
+                    exit(0)
+                }
+            }
+        case .resident:
+            becomeResident(launched: true)
+        case .launched:
+            // A click launch delivers didReceive within a moment; a double
+            // click in Finder or Spotlight delivers nothing, and wants the window.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self = self, !self.responded else { return }
+                self.becomeResident(launched: false)
+                self.openHistory(query: nil)
             }
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !keepAlive }
 
-    func infoPath(for o: Options, id: String) -> String? {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openHistory(query: nil)
+        return false
+    }
+
+    /// Done with a one-shot job: quit unless something keeps us here.
+    func finishIfTransient() {
+        if !keepAlive && historyWindow == nil && infoWindow == nil { exit(0) }
+    }
+
+    // MARK: resident
+
+    func becomeResident(launched: Bool) {
+        if launched { residentLaunch = true }
+        applySettings()
+        IPC.observe(IPC.settings) { [weak self] _ in self?.applySettings() }
+        IPC.observe(IPC.show) { [weak self] n in
+            self?.openHistory(query: n.userInfo?["query"] as? String)
+        }
+        HistoryEntry.prune(days: Config.retentionDays)
+    }
+
+    func applySettings() {
+        NSApp.setActivationPolicy(Config.dock ? .regular : .accessory)
+        if Config.menubar, statusItem == nil {
+            statusItem = StatusItem(app: self)
+        } else if !Config.menubar, let s = statusItem {
+            s.remove()
+            statusItem = nil
+        }
+        if !keepAlive && historyWindow == nil && infoWindow == nil && options.mode == .resident {
+            // Every reason to stay was switched off from elsewhere.
+            exit(0)
+        }
+    }
+
+    func openHistory(query: String?) {
+        if historyWindow == nil {
+            let w = HistoryWindow()
+            w.onClose = { [weak self] in
+                self?.historyWindow = nil
+                self?.finishIfTransient()
+            }
+            historyWindow = w
+        }
+        historyWindow?.show(query: query)
+    }
+
+    @objc func showHistory(_ sender: Any?) { openHistory(query: nil) }
+
+    @objc func findInHistory(_ sender: Any?) {
+        openHistory(query: nil)
+        historyWindow?.focusSearch()
+    }
+
+    @objc func openEntry(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        openHistory(query: nil)
+        historyWindow?.select(path: path)
+    }
+
+    @objc func toggleSetting(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        let on = sender.state == .on
+        if let err = Config.set(key, on ? "off" : "on") { NSLog("Notify: %@", err) }
+        applySettings()
+    }
+
+    // MARK: subcommands
+
+    func entries(_ o: Options) -> [HistoryEntry] {
+        var list = HistoryEntry.all()
+        if let s = o.since {
+            guard let date = HistoryEntry.since(s) else { fail("--since wants 7d, 36h, 90m or a date like 2026-10-01", code: 2) }
+            list = list.filter { ($0.time ?? .distantPast) >= date }
+        }
+        let q = o.query.joined(separator: " ")
+        if !q.isEmpty { list = list.filter { $0.matches(q) } }
+        if o.limit > 0 { list = Array(list.prefix(o.limit)) }
+        return list
+    }
+
+    func printHistory(_ o: Options) {
+        let list = entries(o)
+        if o.json {
+            let data = try! JSONSerialization.data(withJSONObject: list.map { $0.json }, options: [.prettyPrinted, .sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+            return
+        }
+        if o.paths {
+            for e in list { print(e.path) }
+            return
+        }
+        if list.isEmpty {
+            print(o.query.isEmpty ? "nothing in \(historyDir)" : "no match")
+            return
+        }
+        for e in list {
+            let when = e.time.map { HistoryEntry.shown.string(from: $0) } ?? String(repeating: " ", count: 16)
+            let who = e.sender.padding(toLength: 18, withPad: " ", startingAt: 0)
+            var line = when + "  " + who + "  " + e.title
+            if let b = e["body"], !b.isEmpty { line += "  —  " + b.replacingOccurrences(of: "\n", with: " ") }
+            if let c = e["outcome.clicked"], !c.isEmpty { line += "  [clicked]" }
+            print(line)
+        }
+    }
+
+    func printIcons(_ o: Options) {
+        let q = o.query.joined(separator: " ")
+        if Glyphs.fontName == nil { fail("the bundle has no Nerd Font; scripts/fetch-nerd-font.sh fetches it", code: 1) }
+        if let out = o.png {
+            // The query is a spec first (fa-rocket, sf:bell, U+F135, a character)
+            // and a search second, so the first match of a word renders too.
+            guard let icon = IconSpec(q) ?? Glyphs.search(q, limit: 1).first.flatMap({ IconSpec($0.name) }) else {
+                fail("no glyph for \(q)", code: 1)
+            }
+            let color = o.color.flatMap(parseColor) ?? .labelColor
+            guard let image = iconImage(icon, color: color, pixels: 256), writePNG(image, to: out) else { fail("cannot render \(q)", code: 1) }
+            print("wrote \(out) (\(icon.spec))")
+            return
+        }
+        let hits = Glyphs.search(q, limit: q.isEmpty ? 40 : 200)
+        if hits.isEmpty { print("no glyph name contains \(q)"); return }
+        for h in hits { print("\(h.char)  \(h.name)  U+\(h.code.uppercased())") }
+        if q.isEmpty { print("… \(Glyphs.index.count) names; `notify icons QUERY` narrows them") }
+    }
+
+    func runConfig(_ o: Options) {
+        guard let key = o.configKey else { print(Config.describe()); return }
+        guard let value = o.configValue else {
+            guard let v = Config.get(key) else { fail("unknown setting \(key); the settings are \(Config.keys.joined(separator: ", "))", code: 2) }
+            print(v)
+            return
+        }
+        if let err = Config.set(key, value) { fail(err, code: 1) }
+        print("\(key): \(Config.get(key) ?? value)")
+    }
+
+    // MARK: posting
+
+    func infoBody(for o: Options) -> String {
         if let f = o.infoFile {
             if f == "-" {
-                let data = FileHandle.standardInput.readDataToEndOfFile()
-                return write(String(decoding: data, as: UTF8.self), id: id)
+                return String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
             }
-            return (f as NSString).expandingTildeInPath
+            let path = (f as NSString).expandingTildeInPath
+            return (try? String(contentsOfFile: path, encoding: .utf8)) ?? "The info file could not be read.\n\n`\(path)`"
         }
-        if let md = o.infoMarkdown { return write(md, id: id) }
-        return nil
-    }
-
-    func write(_ markdown: String, id: String) -> String {
-        try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
-        prune()
-        let path = stateDir + "/" + id.replacingOccurrences(of: "/", with: "_") + ".md"
-        do { try markdown.write(toFile: path, atomically: true, encoding: .utf8) }
-        catch { fail("cannot write \(path): \(error.localizedDescription)", code: 1) }
-        return path
-    }
-
-    // Info files for notifications long dismissed: drop them after a week.
-    func prune() {
-        let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: stateDir) else { return }
-        let cutoff = Date().addingTimeInterval(-7 * 86400)
-        for n in names where n.hasSuffix(".md") {
-            let p = stateDir + "/" + n
-            if let m = (try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date, m < cutoff {
-                try? fm.removeItem(atPath: p)
-            }
-        }
+        return o.infoMarkdown ?? ""
     }
 
     func post(_ o: Options) {
+        HistoryEntry.prune(days: Config.retentionDays)
+        // A stable identifier makes a repeat replace the earlier banner
+        // instead of stacking a second one.
+        let id = o.group ?? UUID().uuidString
+        var entry = HistoryEntry(path: HistoryEntry.newPath(), fields: [], body: infoBody(for: o))
+        entry.set("id", id)
+        entry.set("time", HistoryEntry.iso.string(from: Date()))
+        entry.set("title", o.title)
+        if let s = o.subtitle { entry.set("subtitle", s) }
+        entry.set("body", o.body)
+        if let s = o.sound { entry.set("sound", s) }
+        if let g = o.group { entry.set("group", g) }
+        if let c = o.onClick { entry.set("on_click", c) }
+        if let f = o.from { entry.set("from", f) }
+        if let i = o.icon { entry.set("icon", i) }
+        if let c = o.color { entry.set("color", c) }
+        for (k, v) in o.meta { entry.set("meta." + k, v) }
+        for (k, v) in Sender.fields() { entry.set(k, v) }
+        entry.set("status", "posting")
+        entry.write()
+        // The earlier banner with this group is gone from the screen now.
+        if let g = o.group {
+            for var old in HistoryEntry.all() where old.path != entry.path && old["group"] == g && old["outcome.replaced_by"] == nil {
+                old.set("outcome.replaced_by", entry.name)
+                old.write()
+                break
+            }
+        }
+
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error = error { fail("authorization: \(error.localizedDescription)", code: 3) }
+            if let error = error {
+                entry.set("status", "failed: " + error.localizedDescription); entry.write()
+                fail("authorization: \(error.localizedDescription)", code: 3)
+            }
             if !granted {
+                entry.set("status", "failed: notifications are off for Notify.app"); entry.write()
                 fail("notifications are off for Notify.app; turn them on in System Settings > Notifications > Notify", code: 3)
             }
-            // A stable identifier makes a repeat replace the earlier banner
-            // instead of stacking a second one.
-            let id = o.group ?? UUID().uuidString
             let content = UNMutableNotificationContent()
             content.title = o.title
             content.body = o.body
@@ -382,16 +450,31 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
             if let g = o.group { content.threadIdentifier = g }
             var info: [String: String] = [:]
             if let c = o.onClick { info["command"] = c }
-            if let p = self.infoPath(for: o, id: id) {
-                info["info"] = p
-                info["title"] = o.title
+            info["history"] = entry.path
+            info["title"] = o.title
+            if !entry.body.isEmpty {
+                info["info"] = entry.path
                 content.categoryIdentifier = infoCategory
             }
             if let p = ProcessInfo.processInfo.environment["PATH"] { info["path"] = p }
             if let d = ProcessInfo.processInfo.environment["PWD"] { info["cwd"] = d }
             content.userInfo = info
+            if let spec = o.icon, let icon = IconSpec(spec) {
+                let color = o.color.flatMap(parseColor) ?? .labelColor
+                let dir = NSTemporaryDirectory() + "notify-" + UUID().uuidString
+                try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                let png = dir + "/icon.png"
+                if let image = iconImage(icon, color: color, pixels: 256), writePNG(image, to: png),
+                   let attachment = try? UNNotificationAttachment(identifier: "icon", url: URL(fileURLWithPath: png), options: nil) {
+                    content.attachments = [attachment]
+                }
+            }
             center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { error in
-                if let error = error { fail("post: \(error.localizedDescription)", code: 1) }
+                if let error = error {
+                    entry.set("status", "failed: " + error.localizedDescription); entry.write()
+                    fail("post: \(error.localizedDescription)", code: 1)
+                }
+                entry.set("status", "posted"); entry.write()
                 // The request is with the notification daemon once add
                 // completes; a beat more lets the sound start cleanly.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { exit(0) }
@@ -399,11 +482,33 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
         }
     }
 
-    func openInfo(title: String, path: String) {
-        let markdown = (try? String(contentsOfFile: path, encoding: .utf8))
-            ?? "The info file is gone.\n\n`\(path)`"
-        infoWindow = InfoWindow(title: title, markdown: markdown)
-        infoWindow?.show()
+    // MARK: clicks
+
+    func openInfo(title: String, path: String, record: Bool) {
+        var markdown: String
+        if var e = HistoryEntry.load(path) {
+            markdown = e.body
+            if record, e["outcome.info_opened"] == nil {
+                e.set("outcome.info_opened", HistoryEntry.iso.string(from: Date()))
+                e.write()
+            }
+        } else {
+            markdown = (try? String(contentsOfFile: path, encoding: .utf8)) ?? "The info file is gone.\n\n`\(path)`"
+        }
+        if markdown.isEmpty { markdown = "_No info text came with this notification._" }
+        let w = InfoWindow(title: title, markdown: markdown)
+        w.onClose = { [weak self] in
+            self?.infoWindow = nil
+            self?.finishIfTransient()
+        }
+        infoWindow = w
+        w.show()
+    }
+
+    func record(_ info: [AnyHashable: Any], _ key: String) {
+        guard let path = info["history"] as? String, var e = HistoryEntry.load(path) else { return }
+        e.set(key, HistoryEntry.iso.string(from: Date()))
+        e.write()
     }
 
     func runOnClick(_ info: [AnyHashable: Any]) {
@@ -435,13 +540,17 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
         case infoAction:
             let title = info["title"] as? String ?? response.notification.request.content.title
             DispatchQueue.main.async {
-                self.openInfo(title: title, path: info["info"] as? String ?? "")
+                self.openInfo(title: title, path: info["info"] as? String ?? "", record: true)
             }
         case UNNotificationDefaultActionIdentifier:
+            record(info, "outcome.clicked")
             runOnClick(info)
-            exit(0)
+            finishIfTransient()
+        case UNNotificationDismissActionIdentifier:
+            record(info, "outcome.dismissed")
+            finishIfTransient()
         default:
-            exit(0)
+            finishIfTransient()
         }
     }
 
@@ -464,8 +573,8 @@ let center = UNUserNotificationCenter.current()
 center.delegate = delegate
 let info = UNNotificationAction(identifier: infoAction, title: "Info", options: [.foreground])
 center.setNotificationCategories([
-    UNNotificationCategory(identifier: infoCategory, actions: [info], intentIdentifiers: [], options: []),
+    UNNotificationCategory(identifier: infoCategory, actions: [info], intentIdentifiers: [], options: [.customDismissAction]),
 ])
 app.setActivationPolicy(.accessory)
-installMenu()
+installMenu(delegate)
 app.run()

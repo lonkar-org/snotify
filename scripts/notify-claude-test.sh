@@ -72,6 +72,15 @@ event "$work" "/notification-companion:notify off" "" p-off | "$nc" prompt
 event "$work" "/notify" "" p-arm | TMUX_PANE=%42 TERM_PROGRAM=ghostty "$nc" prompt
 echo "2b ok: the plugin's spelling arms and disarms too"
 
+# inside tmux TERM_PROGRAM says tmux, and the launching app's bundle id is what
+# names the terminal; the click then uses `open -b`
+"$nc" disarm "$sid" >/dev/null
+event "$work" "/notify" "" p-arm | TMUX_PANE=%42 TERM_PROGRAM=tmux __CFBundleIdentifier=com.mitchellh.ghostty "$nc" prompt
+grep -q '^terminal=com.mitchellh.ghostty$' "$flag" || fail "the bundle id was not recorded under tmux"
+"$nc" disarm "$sid" >/dev/null
+event "$work" "/notify" "" p-arm | TMUX_PANE=%42 TERM_PROGRAM=ghostty "$nc" prompt
+echo "2c ok: under tmux the terminal comes from __CFBundleIdentifier"
+
 # no prompt since the /notify: the Stop is the arming turn's, stay armed
 event "$idle" "" "" p-arm | "$nc" stop
 [[ -f $flag ]] || fail "the idle arming turn disarmed"

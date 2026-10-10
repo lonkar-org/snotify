@@ -27,6 +27,15 @@ test *args:
 test-claude:
     {{scripts}}/notify-claude-test.sh
 
+# Build DIR/Notify.app, then exercise it: history files, search, icons, config, the window
+test-app dir="dist":
+    {{scripts}}/notify-app.sh build {{dir}}
+    {{scripts}}/notify-app-test.sh {{dir}}/Notify.app
+
+# Re-vendor Resources/nerd-fonts from the pinned Nerd Fonts release (`VERSION` to move it)
+fetch-nerd-font version="":
+    {{scripts}}/fetch-nerd-font.sh {{version}}
+
 # just snapshot notes.md out.png
 # Render the Info window for a Markdown file to a PNG, no screen capture
 snapshot md out:
@@ -60,7 +69,7 @@ plugin-validate:
 review-marks:
     {{scripts}}/check-review-marks.sh
 
-# Everything CI runs, native; review-marks first since it takes a second
+# Everything CI runs that needs no build, native; `just test-app` is the macOS build job
 ci: review-marks lint lint-md plugin-validate test-claude
     @echo "review marks, shellcheck, markdownlint, the plugin validator and the hook tests all passed"
 

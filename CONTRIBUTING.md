@@ -14,16 +14,24 @@ pull request that's going to fail does it here rather than in review. The
 hook suite posts one real banner through whatever `notify` finds; that's
 expected.
 
-`just dmg dist` builds the app and the DMG the way release.yml does, if you
-touched `Sources/` or the build script. It needs `swiftc` from the Xcode
-command line tools.
+`just test-app` builds the app and runs `scripts/notify-app-test.sh` against
+it, which is what CI's macOS job does: the history files a post writes, the
+search, the icons, the settings and the window rendered to a PNG. `just dmg
+dist` builds the DMG the way release.yml does. Both need `swiftc` from the
+Xcode command line tools.
 
 ## What a change needs
 
 - **A step in `scripts/notify-claude-test.sh`** for anything the hook does
-  differently. The suite drives `bin/notify-claude` with fake transcripts and
-  hook events, no Claude Code involved, and every case that has gone wrong
-  once is a step in it.
+  differently, and one in `scripts/notify-app-test.sh` for anything the app
+  does differently. The first drives `bin/notify-claude` with fake transcripts
+  and hook events, no Claude Code involved; the second drives a built
+  Notify.app with a temporary state directory and a test settings domain, so
+  nothing on your machine changes. Every case that has gone wrong once is a
+  step in one of them.
+- **bash 3.2.** `bin/notify` and `bin/notify-claude` run on whatever `bash`
+  is on PATH, and on a Mac without Homebrew that is the 3.2 Apple ships: no
+  `mapfile`, no associative arrays, no `${var,,}`.
 - **The header comment of the script you changed** kept true. `bin/notify`,
   `bin/notify-claude` and `scripts/notify-app.sh` print their own header as
   usage, so the comment is the documentation.
