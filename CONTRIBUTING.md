@@ -22,6 +22,9 @@ Xcode command line tools.
 
 ## What a change needs
 
+It fits [docs/mucus.md](docs/mucus.md). A change that polls, filters,
+throttles or shows a post twice doesn't go in whatever else it does.
+
 - **A step in `scripts/snotify-claude-test.sh`** for anything the hook does
   differently, and one in `scripts/snotify-app-test.sh` for anything the app
   does differently. The first drives `bin/snotify-claude` with fake transcripts
