@@ -6,7 +6,7 @@
 #          --no-push   commit and tag locally, push nothing
 #          --dry-run   print every step, change nothing
 #
-# One version covers the app, the plugin and the cask, and it lives in
+# One version covers the app, the plugin and the formula, and it lives in
 # .claude-plugin/plugin.json; the release gate refuses a tag that disagrees
 # with it. This script is the one place that number changes, so the two cannot
 # drift. It refuses a dirty tree, a branch other than main, an empty
@@ -76,7 +76,7 @@ run git tag -a "$tag" -m "$VERSION"
 if [ "$PUSH" = 1 ]; then
   run git push origin main
   run git push origin "$tag"
-  say "pushed; release.yml builds the DMG and waits on the release environment"
+  say "pushed; release.yml packs the tarball, proves the formula and waits on the release environment"
 else
   say "tagged $tag locally; push with: git push origin main $tag"
 fi

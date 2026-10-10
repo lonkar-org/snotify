@@ -72,21 +72,20 @@ jobs:
           node-version: 22
       - run: npx --yes @anthropic-ai/claude-code@2.1.296 plugin validate --strict .
 
-  # Built the way release.yml builds it, so a change that breaks the build or
-  # the signature shows up on the pull request and not on the tag.
+  # Built the way release.yml builds it, so a change that breaks the build,
+  # the signature or the formula shows up on the pull request and not on the tag.
   app:
-    name: Snotify.app and the DMG
+    name: Snotify.app and the formula
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: swiftc --version
-      - run: scripts/snotify-app.sh dmg dist
+      - run: scripts/snotify-app.sh build dist
       - name: Smoke test
         run: |
           set -euo pipefail
           dist/Snotify.app/Contents/MacOS/Snotify --help
           codesign --verify --deep --strict dist/Snotify.app
-          hdiutil verify dist/Snotify-*.dmg
           test -x dist/Snotify.app/Contents/Resources/bin/snotify
           test -f dist/Snotify.app/Contents/Resources/skills/notify/SKILL.md
           test -f dist/Snotify.app/Contents/Resources/nerd-fonts/SymbolsNerdFontMono-Regular.ttf
@@ -94,14 +93,9 @@ jobs:
       # app. The runner has no notification permission, so the posts exit 3
       # and the suite checks the entries that records.
       - run: scripts/snotify-app-test.sh dist/Snotify.app
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: Snotify-dmg
-          path: |
-            dist/*.dmg
-            dist/checksums.txt
-          retention-days: 7
-          if-no-files-found: error
+      # The formula, installed from a tarball of this commit through a
+      # throwaway tap, the way a user's brew installs it from a release.
+      - run: scripts/formula-test.sh
 
   required:
     needs: [shellcheck, hooks, plugin, app]

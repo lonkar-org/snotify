@@ -48,6 +48,16 @@ with `--color`, `--icon` and the words on the banner.
   so it never lands on top of a tally sound. The spacing is about hearing,
   not counting.
 - **Window 3 s, spacing 500 ms, burst limit 20 s.** The evidence is below.
+- **The queue is capped.** The spacing holds the whole banner, not just the
+  sound, and it's measured from the previous post's scheduled time, so
+  delays add up: ten posts fired in the same instant would land over five
+  seconds and sixty over half a minute, with click commands running long
+  after the loop that posted them finished. So only so many posts wait on
+  the spacing. Past the cap a post lands at once with no sound, or, if the
+  user chooses, the extras become one banner at the end of the queue, "12
+  more from backup.sh". Every post is in the history either way, collapsing
+  is about what's on screen and never about what's kept. The cap and the
+  default are set after the first weeks of use.
 - **The history records the burst, not the sound.** Which file played is
   worth nothing later. Which posts made one burst, how far apart they were
   and from where is what someone with a heavy stream wants to see, the
@@ -64,6 +74,8 @@ snotify config sound Glass@35,Glass@70,Glass   # your own sequence, by name
 snotify config sound-window 3s         # quiet that ends a burst
 snotify config sound-burst 20s         # the longest one burst can run before it starts over
 snotify config sound-spacing 500ms     # least time between two sound onsets
+snotify config sound-queue 8           # how many posts may wait on the spacing
+snotify config sound-overflow now      # now | collapse: what the posts past the cap do
 ```
 
 A list is any sounds by name, the bundle first, then `~/Library/Sounds`,
@@ -173,5 +185,6 @@ not any studio's character so the repo never names one.
 
 ## Open
 
+- The queue cap and the overflow default, from the first weeks of use.
 - The replacement flavour, once the sounds exist.
 - The sounds themselves. The mechanism ships first on the cut Glass default.

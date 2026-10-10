@@ -7,7 +7,7 @@ labels: bug
 <!-- What you did, and what happened instead. A screenshot helps for a banner or the Info window. -->
 
 - macOS version:
-- How you installed it (brew, DMG, `just install`):
+- How you installed it (brew or `just install`):
 - Snotify version (`/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' /Applications/Snotify.app/Contents/Info.plist`):
 
 <details><summary>For the Claude Code hook: <code>snotify-claude status</code> and the hook lines from <code>claude --debug</code></summary>

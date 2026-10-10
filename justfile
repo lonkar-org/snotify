@@ -53,9 +53,17 @@ uninstall:
 build dir="dist" version="":
     {{scripts}}/snotify-app.sh build {{dir}} {{version}}
 
-# Build, then write DIR/Snotify-VERSION.dmg and checksums.txt, what a release publishes
-dmg dir="dist" version="":
-    {{scripts}}/snotify-app.sh dmg {{dir}} {{version}}
+# Write DIR/snotify-VERSION.tar.gz and checksums.txt from HEAD, what a release publishes
+tarball dir="dist" version="":
+    {{scripts}}/snotify-app.sh tarball {{dir}} {{version}}
+
+# Install the formula from a tarball of HEAD through a throwaway tap, check it, uninstall
+formula-test tarball="":
+    {{scripts}}/formula-test.sh {{tarball}}
+
+# brew style on the formula
+formula-lint:
+    brew style homebrew/Formula/snotify.rb
 
 # shellcheck over every script, the way the shellcheck job does
 lint:
@@ -74,8 +82,8 @@ review-marks:
     {{scripts}}/check-review-marks.sh
 
 # Everything CI runs that needs no build, native; `just test-app` is the macOS build job
-ci: review-marks lint lint-md plugin-validate test-claude
-    @echo "review marks, shellcheck, markdownlint, the plugin validator and the hook tests all passed"
+ci: review-marks lint lint-md formula-lint plugin-validate test-claude
+    @echo "review marks, shellcheck, markdownlint, brew style, the plugin validator and the hook tests all passed"
 
 # One version's CHANGELOG.md section; `--details 0.1.0` is what the release notes print
 changelog-section *args:

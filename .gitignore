@@ -1,4 +1,4 @@
-# Build output: `just build dist` and `just dmg dist`, and what CI uploads.
+# Build output: `just build dist` and `just tarball dist`, and what CI uploads.
 dist/
 
 # Claude Code's per-machine state.

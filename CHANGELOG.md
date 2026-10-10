@@ -2,7 +2,7 @@
 
 Kept in the shape [keep a changelog](https://keepachangelog.com) suggests. One
 version covers the app, the `snotify` command, the Claude Code plugin and the
-Homebrew cask; `just release X.Y.Z` cuts the next section from Unreleased.
+Homebrew formula; `just release X.Y.Z` cuts the next section from Unreleased.
 
 ## Unreleased
 
@@ -35,16 +35,20 @@ Homebrew cask; `just release X.Y.Z` cuts the next section from Unreleased.
 - The terminal a click brings forward is read from `TERM_PROGRAM` when the
   session is armed (Ghostty, iTerm, Terminal, WezTerm, kitty, VS Code,
   Alacritty), with `SNOTIFY_CLAUDE_TERMINAL` as the override.
-- `scripts/snotify-app.sh build` and `dmg`: the app built with `bin/` and
-  `skills/` inside it under `Contents/Resources`, and a DMG with an
-  Applications link and a `checksums.txt`. `snotify` finds the app inside its
-  own bundle, in `~/Applications` or in `/Applications`.
+- `scripts/snotify-app.sh build` and `tarball`: the app built with `bin/`
+  and `skills/` inside it under `Contents/Resources`, and the source tarball
+  with a `checksums.txt` that a release publishes. `snotify` finds the app
+  inside its own bundle, in `~/Applications` or in `/Applications`.
 - GitHub: CI with shellcheck, the hook tests on Ubuntu and macOS, the plugin
-  validator and a signed build; a release workflow that gates the tag, builds
-  the DMG, waits on the `release` environment, publishes and pushes the cask
-  to `lonkar-org/homebrew-tap`; markdownlint; Dependabot on the actions.
-- A Homebrew cask, `brew install --cask lonkar-org/tap/snotify`, which puts
-  `snotify` and `snotify-claude` on PATH and depends on `jq`.
+  validator and a signed build; a release workflow that gates the tag, packs
+  the tarball, proves the formula installs from it, waits on the `release`
+  environment, publishes and pushes the formula to `lonkar-org/homebrew-tap`;
+  markdownlint; Dependabot on the actions.
+- A Homebrew formula, `brew install lonkar-org/tap/snotify`, which builds the
+  app from the release tarball on the user's machine, so nothing is
+  quarantined and nothing needs notarizing, puts `snotify` and
+  `snotify-claude` on PATH and depends on `jq`. `scripts/formula-test.sh`
+  installs it through a throwaway tap in CI and locally.
 - A history: every post is one Markdown file under
   `~/.local/state/snotify/history`, named by the time, with the metadata as
   YAML frontmatter (title, body, sound, group, click command, who sent it as
@@ -83,7 +87,7 @@ Homebrew cask; `just release X.Y.Z` cuts the next section from Unreleased.
   the jump back works from inside tmux.
 - The name: Snotify, `snotify`, `org.lonkar.snotify`. Notifications that
   stick. Everything that carried the old name follows: the app, the command,
-  the hook (`snotify-claude`), the cask, the plugin (`/snotify:notify`), the
+  the hook (`snotify-claude`), the formula, the plugin (`/snotify:notify`), the
   state directory (`~/.local/state/snotify`), the defaults domain, the
   LaunchAgent label and the `SNOTIFY_*` variables. The phrases people type,
   `/notify` and `notify me`, stay.

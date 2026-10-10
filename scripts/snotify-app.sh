@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # snotify-app.sh - build, package and install Snotify.app, the notifier bin/snotify uses.
 #
-# Usage: scripts/snotify-app.sh { build DIR [VERSION] | dmg DIR [VERSION] | status
+# Usage: scripts/snotify-app.sh { build DIR [VERSION] | tarball DIR [VERSION] | status
 #                                | install | test [--scheduled] | uninstall }
-#        (or: just build | dmg | status | install | test | uninstall)
+#        (or: just build | tarball | status | install | test | uninstall)
 #   build DIR  build Snotify.app into DIR, signed, with bin/ and skills/ inside
 #              it under Contents/Resources, so the bundle alone is a complete
 #              install. VERSION goes into Info.plist; the default is the
 #              nearest git tag, or 0.0.0 outside a checkout.
-#   dmg DIR    build, then write DIR/Snotify-VERSION.dmg with the app and an
-#              Applications link, and DIR/checksums.txt beside it. What the
-#              release workflow publishes and the Homebrew cask downloads.
+#   tarball DIR  write DIR/snotify-VERSION.tar.gz, the tracked tree at HEAD
+#              under snotify-VERSION/, and DIR/checksums.txt beside it. What
+#              the release workflow publishes and the Homebrew formula builds
+#              from on the user's machine.
 #   status     exit 0 when ~/Applications/Snotify.app is installed, signed, and
 #              built from the sources in Sources/ as they are now
 #   install    build it, sign it, install it, link ~/.local/bin/snotify and
@@ -31,9 +32,9 @@
 #
 # Signing is ad hoc with a fixed identifier: the notification permission is
 # remembered by signature, so an unsigned rebuild would ask again every time.
-# There is no Developer ID behind it and the DMG is not notarized, so a
-# downloaded copy is quarantined until `xattr -dr com.apple.quarantine` or
-# Homebrew's --no-quarantine clears it; README.md says so where it matters.
+# There is no Developer ID behind it and nothing is notarized: the app is
+# built on the machine it runs on, by `just install` or by the Homebrew
+# formula, so no copy is ever downloaded and quarantined.
 #
 # Found on 2026-10-10: a bundle freshly copied into ~/Applications is not
 # always known to LaunchServices yet, so a click could not relaunch it until
@@ -100,8 +101,8 @@ build_app() { # build_app DIR [VERSION]  -> DIR/Snotify.app
   "$tmp/icon" "$tmp/Snotify.iconset"
   iconutil -c icns "$tmp/Snotify.iconset" -o "$stage/Contents/Resources/Snotify.icns"
   rm -rf "$tmp"
-  # The command, the hook and the skill travel inside the bundle, so a DMG or
-  # a cask install has them: the cask links Contents/Resources/bin onto PATH.
+  # The command, the hook and the skill travel inside the bundle, so a formula
+  # install has them: it links Contents/Resources/bin onto PATH.
   mkdir -p "$stage/Contents/Resources/bin" "$stage/Contents/Resources/skills"
   cp "$wrapper" "$claude_hook" "$stage/Contents/Resources/bin/"
   cp -R "$skill" "$stage/Contents/Resources/skills/"
@@ -150,23 +151,16 @@ case ${1:-} in
     printf 'built %s/Snotify.app, version %s\n' "$dir" \
       "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$dir/Snotify.app/Contents/Info.plist")"
     ;;
-  dmg)
-    dir=${2:?usage: $self dmg DIR [VERSION]}
+  tarball)
+    dir=${2:?usage: $self tarball DIR [VERSION]}
     version=$(version_of "${3:-}")
     mkdir -p "$dir"
-    build_app "$dir" "$version"
-    stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
-    cp -R "$dir/Snotify.app" "$stage/"
-    ln -s /Applications "$stage/Applications"
-    cp "$root/README.md" "$root/LICENSE" "$stage/"
-    dmg=$dir/Snotify-$version.dmg
-    rm -f "$dmg"
-    # UDZO is the compressed read-only image every drag-to-Applications DMG is;
-    # -fs HFS+ because APFS images do not mount on macOS 10.12 and older, and
-    # costs nothing here.
-    hdiutil create -quiet -volname "Snotify $version" -srcfolder "$stage" -ov -fs HFS+ -format UDZO "$dmg"
-    (cd "$dir" && shasum -a 256 "${dmg##*/}" > checksums.txt)
-    printf 'wrote %s\n' "$dmg"
+    out=$(cd "$dir" && pwd)/snotify-$version.tar.gz
+    # The tracked tree only, so a build on the user's machine is a build of
+    # what the tag holds and nothing a working copy had lying around.
+    git -C "$root" archive --format=tar.gz --prefix="snotify-$version/" -o "$out" HEAD
+    (cd "$dir" && shasum -a 256 "${out##*/}" > checksums.txt)
+    printf 'wrote %s\n' "$out"
     cat "$dir/checksums.txt"
     ;;
   status)

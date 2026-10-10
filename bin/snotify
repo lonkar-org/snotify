@@ -34,10 +34,10 @@
 # and the Info text as the body; `snotify history` and the window search them.
 #
 # The app is looked for as SNOTIFY_APP, then the bundle this script sits inside
-# (a cask links Contents/Resources/bin/snotify onto PATH), then
-# ~/Applications/Snotify.app (`just install`) and /Applications/Snotify.app (the
-# DMG). Without one this falls back to osascript on macOS and notify-send
-# elsewhere, with the title, body and sound only: a click then does nothing,
+# (the Homebrew formula links Contents/Resources/bin/snotify onto PATH), then
+# ~/Applications/Snotify.app (`just install`) and /Applications/Snotify.app.
+# Without one this falls back to osascript on macOS and notify-send elsewhere,
+# with the title, body and sound only: a click then does nothing,
 # nothing is kept, and the subcommands say so.
 set -euo pipefail
 

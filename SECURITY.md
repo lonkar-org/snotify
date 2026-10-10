@@ -38,7 +38,7 @@ Things I'd especially like to hear about:
 - `snotify-claude`: the hook reads Claude Code's transcript and hook events
   with `jq` and builds a shell command from the tmux pane and terminal name
   it recorded. Anything in a transcript or a prompt that changes that command.
-- The release pipeline: the DMG, the checksum and the cask.
+- The release pipeline: the source tarball, the checksum and the formula.
 
 Out of scope: anything that needs an attacker who is already your user on
 your machine, and bugs in macOS's notification centre, tmux or your terminal

@@ -16,9 +16,10 @@ expected.
 
 `just test-app` builds the app and runs `scripts/snotify-app-test.sh` against
 it, which is what CI's macOS job does: the history files a post writes, the
-search, the icons, the settings and the window rendered to a PNG. `just dmg
-dist` builds the DMG the way release.yml does. Both need `swiftc` from the
-Xcode command line tools.
+search, the icons, the settings and the window rendered to a PNG. `just
+formula-test` installs the Homebrew formula from a tarball of HEAD through a
+throwaway tap and removes it again, the way release.yml proves a tag. Both
+need `swiftc` from the Xcode command line tools.
 
 ## What a change needs
 
@@ -47,7 +48,7 @@ throttles or shows a post twice doesn't go in whatever else it does.
 
 ## Reporting something broken
 
-Say how you installed it (brew, DMG or `just install`), your macOS version,
+Say how you installed it (brew or `just install`), your macOS version,
 and for the Claude Code hook what `snotify-claude status` prints and the hook
 lines from `claude --debug`. If a click did nothing, say which terminal you
 run Claude Code in: the click brings the terminal forward by the name

@@ -1,6 +1,9 @@
 name: Release
 
-# Builds Snotify.app, packages the DMG and publishes it on a tag.
+# Packs the source tarball, proves it builds and installs, and publishes it on
+# a tag. The Homebrew formula then builds Snotify.app from that tarball on the
+# user's machine, so nothing here is signed for distribution and nothing is
+# notarized: a local build is never quarantined.
 #
 # Cut one with `just release 0.1.0`, which bumps .claude-plugin/plugin.json,
 # dates the Unreleased section of CHANGELOG.md, commits, tags and pushes. By
@@ -13,20 +16,16 @@ name: Release
 # CHANGELOG.md, which the release notes open with; the tree has to hold no
 # review marker; shellcheck, the hook tests and the plugin validator have to
 # pass, the same checks ci.yml runs on every push. The build waits on it, so a
-# tag pushed on a red tree produces no DMG rather than one nobody tested.
+# tag pushed on a red tree produces no release rather than one nobody tested.
 # Publishing then waits on the `release` environment, so an admin approves
 # before anything reaches the Releases page. Configure that once under
 # Settings, Environments, release, Required reviewers. Without the environment
 # the publish job runs unapproved, which is worth knowing before the first tag.
 #
-# The app is signed ad hoc on the runner, with the same fixed identifier the
-# local build uses, and the DMG is not notarized: there is no Developer ID
-# behind this project. README.md tells people to clear the quarantine flag.
-#
-# The last job pushes the new version and checksum into the Homebrew tap at
-# lonkar-org/homebrew-tap, as Casks/snotify.rb. The cask lives in this
+# The last job pushes the new url and checksum into the Homebrew tap at
+# lonkar-org/homebrew-tap, as Formula/snotify.rb. The formula lives in this
 # repository under homebrew/ and is copied over, so one place holds the rules
-# about what the cask installs. It needs a secret named TAP_DEPLOY_KEY on this
+# about what the formula builds. It needs a secret named TAP_DEPLOY_KEY on this
 # repository: the private half of a write-enabled deploy key on the tap. The
 # workflow's own GITHUB_TOKEN cannot reach another repository, and a deploy key
 # is scoped to that one repository's contents and to nothing else.
@@ -77,7 +76,7 @@ jobs:
           fi
           echo "$TAG is on main"
 
-      # One version for the app, the plugin and the cask, kept in plugin.json.
+      # One version for the app, the plugin and the formula, kept in plugin.json.
       - name: The tag names the version in plugin.json
         run: |
           set -euo pipefail
@@ -103,7 +102,7 @@ jobs:
       - run: npx --yes @anthropic-ai/claude-code@2.1.296 plugin validate --strict .
 
   build:
-    name: Snotify.app and the DMG
+    name: The tarball, built and installed
     needs: gate
     runs-on: macos-latest
     env:
@@ -114,24 +113,30 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       - run: swiftc --version
-      - run: scripts/snotify-app.sh dmg dist "$TAG"
+      - run: scripts/snotify-app.sh tarball dist "$TAG"
 
-      # An app that cannot print its usage, or a DMG that does not verify, is
-      # not one worth publishing, and both are free here.
-      - name: Smoke test
+      # Built from the tarball and not from the checkout, so what is proven is
+      # what a user's brew will unpack.
+      - name: Build and test from the tarball
         run: |
           set -euo pipefail
-          dist/Snotify.app/Contents/MacOS/Snotify --help
-          codesign --verify --deep --strict dist/Snotify.app
-          hdiutil verify dist/Snotify-*.dmg
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' dist/Snotify.app/Contents/Info.plist
-      - run: scripts/snotify-app-test.sh dist/Snotify.app
+          version=${TAG#v}
+          mkdir -p unpacked
+          tar -xzf "dist/snotify-$version.tar.gz" -C unpacked
+          src=unpacked/snotify-$version
+          "$src/scripts/snotify-app.sh" build "$src/dist" "$TAG"
+          "$src/dist/Snotify.app/Contents/MacOS/Snotify" --help
+          codesign --verify --deep --strict "$src/dist/Snotify.app"
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$src/dist/Snotify.app/Contents/Info.plist"
+          "$src/scripts/snotify-app-test.sh" "$src/dist/Snotify.app"
+      - run: scripts/formula-test.sh "dist/snotify-${TAG#v}.tar.gz"
+      - run: brew style homebrew/Formula/snotify.rb
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Snotify-dmg
+          name: snotify-tarball
           path: |
-            dist/*.dmg
+            dist/*.tar.gz
             dist/checksums.txt
           if-no-files-found: error
 
@@ -153,7 +158,7 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: Snotify-dmg
+          name: snotify-tarball
           path: assets
 
       - name: Release
@@ -161,7 +166,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version=${TAG#v}
           notes=$(mktemp)
           {
             ./scripts/changelog-section.sh --details "$TAG"
@@ -171,11 +175,10 @@ jobs:
             echo "## Install"
             echo
             echo '```sh'
-            echo "brew tap lonkar-org/tap && brew install --cask --no-quarantine snotify"
+            echo "brew tap lonkar-org/tap && brew trust lonkar-org/tap && brew install snotify"
             echo '```'
             echo
-            echo "Or open \`Snotify-$version.dmg\` below, drag Snotify.app to Applications and clear the quarantine flag:"
-            echo "\`xattr -dr com.apple.quarantine /Applications/Snotify.app\`. The app is signed ad hoc, not notarized."
+            echo "That builds Snotify.app on your machine from the tarball below, so there is no quarantine flag to clear. It needs \`swiftc\` from the Xcode command line tools."
             echo
             echo "In Claude Code: \`/plugin install snotify --marketplace lonkar-org/snotify\`."
             echo
@@ -185,7 +188,7 @@ jobs:
             cat assets/checksums.txt
             echo '```'
           } > "$notes"
-          gh release create "$TAG" assets/*.dmg assets/checksums.txt \
+          gh release create "$TAG" assets/*.tar.gz assets/checksums.txt \
             --repo "${{ github.repository }}" \
             --title "$TAG" \
             --notes-file "$notes"
@@ -228,16 +231,16 @@ jobs:
           ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
           path: tap
 
-      - name: Fill in the cask
+      - name: Fill in the formula
         if: steps.token.outputs.have == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh release download "$TAG" --repo "${{ github.repository }}" --pattern checksums.txt --dir .
-          mkdir -p tap/Casks
-          cp homebrew/Casks/snotify.rb tap/Casks/snotify.rb
-          homebrew/update-cask.sh "$TAG" checksums.txt tap/Casks/snotify.rb
+          mkdir -p tap/Formula
+          cp homebrew/Formula/snotify.rb tap/Formula/snotify.rb
+          homebrew/update-formula.sh "$TAG" checksums.txt tap/Formula/snotify.rb
           git -C tap --no-pager diff
 
       - name: Commit it
@@ -247,9 +250,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/snotify.rb
+          git add Formula/snotify.rb
           if git diff --cached --quiet; then
-            echo "the cask already points at $TAG"
+            echo "the formula already points at $TAG"
             exit 0
           fi
           git commit -m "snotify ${TAG#v}" \

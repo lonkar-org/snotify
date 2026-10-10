@@ -18,30 +18,19 @@ Why an app and not `osascript -e 'display notification'`: that banner is attribu
 
 ## Install
 
-macOS 13 or later. The app is signed ad hoc and not notarized since there's no Developer ID behind this project, so macOS blocks the first launch of a downloaded copy until the quarantine flag is cleared. Each path below says how. The first banner makes macOS ask once whether Snotify may notify; the answer is kept under System Settings > Notifications > Snotify.
+macOS 13 or later. Both paths build the app on your machine, so nothing is downloaded that Gatekeeper would block: no quarantine flag to clear and nothing to notarize. The first banner makes macOS ask once whether Snotify may notify; the answer is kept under System Settings > Notifications > Snotify.
 
 ### Homebrew
 
+Needs `swiftc` from the Xcode command line tools (`xcode-select --install`).
+
 ```sh
 brew tap lonkar-org/tap
-brew trust lonkar-org/tap       # Homebrew 7 won't load a cask from an untrusted tap
-brew install --cask --no-quarantine snotify
+brew trust lonkar-org/tap       # Homebrew 7 won't load a formula from an untrusted tap
+brew install snotify
 ```
 
-That installs Snotify.app into `/Applications`, puts `snotify` and `snotify-claude` on PATH and pulls in `jq` for the hook. Without `--no-quarantine`, clear the flag by hand as the DMG section says.
-
-### DMG
-
-Download `Snotify-X.Y.Z.dmg` from the [latest release](https://github.com/lonkar-org/snotify/releases/latest), drag Snotify.app to Applications, then:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/Snotify.app
-mkdir -p ~/.local/bin
-ln -s /Applications/Snotify.app/Contents/Resources/bin/snotify ~/.local/bin/snotify
-ln -s /Applications/Snotify.app/Contents/Resources/bin/snotify-claude ~/.local/bin/snotify-claude
-```
-
-The command, the hook and the skill travel inside the bundle under `Contents/Resources` so the DMG is a complete install. `checksums.txt` beside it on the release carries the sha256.
+That compiles Snotify.app into the Cellar, puts `snotify` and `snotify-claude` on PATH and pulls in `jq` for the hook. It compiles, so it takes longer than a download. `brew upgrade snotify` moves the app, so a login item from `snotify config login on` needs turning on again after one.
 
 ### From source
 
@@ -214,10 +203,10 @@ The skill itself is only the acknowledgement line; the hooks don't need any help
 - `Sources/icon.swift`: draws the app's icon set at build time. `Resources/nerd-fonts/`: Symbols Nerd Font Mono and its name index, vendored by `scripts/fetch-nerd-font.sh` from a pinned release.
 - `bin/snotify`: the command. `bin/snotify-claude`: the Claude Code hook. Both print their header comment as usage.
 - `skills/notify`: the `/notify` skill. `hooks/hooks.json` and `.claude-plugin/`: the plugin.
-- `scripts/snotify-app.sh`: build, dmg, install, status, test, uninstall. `scripts/snotify-app-test.sh`: the built app against a temporary state directory. `scripts/snotify-claude-test.sh`: the hook against fake transcripts. `scripts/snotify-demo.sh`: twenty demo notifications from four mocked senders, `just demo`.
+- `scripts/snotify-app.sh`: build, tarball, install, status, test, uninstall. `scripts/formula-test.sh`: the Homebrew formula installed from a tarball of HEAD through a throwaway tap. `scripts/snotify-app-test.sh`: the built app against a temporary state directory. `scripts/snotify-claude-test.sh`: the hook against fake transcripts. `scripts/snotify-demo.sh`: twenty demo notifications from four mocked senders, `just demo`.
 - `docs/`: `docs/mucus.md` is what doesn't change, no polling, no filtering, no duplicating, one history in files. `docs/sneeze.md` is the default sound, a tally that builds up to a sneeze, decided and not built yet.
-- `homebrew/`: the cask and the script that points it at a release; the release workflow copies them into [lonkar-org/homebrew-tap](https://github.com/lonkar-org/homebrew-tap).
-- `.github/workflows/`: `ci.yml` runs what `just ci` runs, `release.yml` builds the DMG on a `v*` tag and publishes after an approval, `markdown.yml` lints the Markdown.
+- `homebrew/`: the formula, which builds the app from a release tarball on the user's machine, and the script that points it at a release; the release workflow copies them into [lonkar-org/homebrew-tap](https://github.com/lonkar-org/homebrew-tap).
+- `.github/workflows/`: `ci.yml` runs what `just ci` runs, `release.yml` packs the source tarball on a `v*` tag, proves the formula installs from it and publishes after an approval, `markdown.yml` lints the Markdown.
 
 `just` lists every recipe. `just ci` is the pre-push check and [CONTRIBUTING.md](CONTRIBUTING.md) has the rest, how a release is cut included.
 
