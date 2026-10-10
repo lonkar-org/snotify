@@ -1,0 +1,14 @@
+# Dependabot bumps what is pinned, so a pin is a decision that gets revisited
+# rather than a version that quietly rots. Every `uses:` in the workflows is
+# pinned to a commit SHA with the version in a trailing comment, which
+# Dependabot rewrites alongside it. Weekly and grouped, so it is one pull
+# request a week rather than one per action.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

@@ -1,0 +1,110 @@
+name: CI
+
+# Runs what `just ci` runs, so a pull request fails here rather than in review:
+# shellcheck over the scripts, the hook's own test suite on both runners, the
+# plugin manifests through Claude Code's validator, and the app built, signed
+# and packaged on macOS the way release.yml will do it.
+#
+# Markdown is left out, with one exception: skills/notify/SKILL.md is read by
+# the plugin validator, so an edit to it starts a run. It is `paths` with a
+# negation rather than `paths-ignore`, because GitHub allows one or the other
+# and only `paths` can carve an exception back out; later patterns win.
+#
+# Every workflow with a paths filter ends in a job called `required`, so a
+# ruleset on main can ask for that one check and always get it from whichever
+# workflow the files started. GitHub leaves a required check pending rather
+# than passing it when its workflow is skipped by paths, which is why the
+# ruleset can't name this workflow's jobs directly.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**'
+      - '!**/*.md'
+      - 'skills/notify/SKILL.md'
+  pull_request:
+    paths:
+      - '**'
+      - '!**/*.md'
+      - 'skills/notify/SKILL.md'
+  workflow_dispatch:
+
+# Each `uses:` is pinned to a commit SHA with its version in a trailing comment.
+# Dependabot moves them (.github/dependabot.yml). Read-only everywhere: no job
+# here writes to the repository.
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: shellcheck --version
+      - run: shellcheck -S style bin/notify bin/notify-claude scripts/*.sh homebrew/*.sh
+
+  # The hook against fake transcripts and hook events, no Claude Code involved.
+  # On a runner `notify` falls back to osascript or notify-send, and both are
+  # swallowed by the hook, so the one banner the suite posts is harmless here.
+  hooks:
+    name: hook tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: jq --version
+      - run: scripts/notify-claude-test.sh
+
+  # Claude Code's own validator over .claude-plugin/, hooks/ and skills/, with
+  # warnings as errors. The version is pinned so a new release's new rule fails
+  # here on purpose and not on an unrelated pull request; bump it by hand.
+  plugin:
+    name: plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - run: npx --yes @anthropic-ai/claude-code@2.1.296 plugin validate --strict .
+
+  # Built the way release.yml builds it, so a change that breaks the build or
+  # the signature shows up on the pull request and not on the tag.
+  app:
+    name: Notify.app and the DMG
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: swiftc --version
+      - run: scripts/notify-app.sh dmg dist
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          dist/Notify.app/Contents/MacOS/Notify --help
+          codesign --verify --deep --strict dist/Notify.app
+          hdiutil verify dist/Notify-*.dmg
+          test -x dist/Notify.app/Contents/Resources/bin/notify
+          test -f dist/Notify.app/Contents/Resources/skills/notify/SKILL.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Notify-dmg
+          path: |
+            dist/*.dmg
+            dist/checksums.txt
+          retention-days: 7
+          if-no-files-found: error
+
+  required:
+    needs: [shellcheck, hooks, plugin, app]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done

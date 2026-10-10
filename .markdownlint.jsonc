@@ -1,0 +1,10 @@
+// markdownlint's default rules, run by .github/workflows/markdown.yml and
+// `just lint-md`. Each change from the defaults says why.
+{
+  // The README is one paragraph per line in places, and tables run long.
+  "MD013": false,
+  // CHANGELOG.md repeats Added, Changed and Fixed under every release.
+  "MD024": { "siblings_only": true },
+  // Side-by-side images and collapsed sections have no Markdown spelling.
+  "MD033": { "allowed_elements": ["a", "br", "code", "details", "img", "p", "picture", "source", "summary"] }
+}

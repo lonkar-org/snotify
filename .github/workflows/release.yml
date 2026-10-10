@@ -1,0 +1,256 @@
+name: Release
+
+# Builds Notify.app, packages the DMG and publishes it on a tag.
+#
+# Cut one with `just release 0.1.0`, which bumps .claude-plugin/plugin.json,
+# dates the Unreleased section of CHANGELOG.md, commits, tags and pushes. By
+# hand it is the same two lines:
+#
+#   git tag -a v0.1.0 -m "0.1.0" && git push origin v0.1.0
+#
+# or run it from the Actions tab with a tag name. A gate runs first: the tag has
+# to be on main, match the version in plugin.json and have a section in
+# CHANGELOG.md, which the release notes open with; the tree has to hold no
+# review marker; shellcheck, the hook tests and the plugin validator have to
+# pass, the same checks ci.yml runs on every push. The build waits on it, so a
+# tag pushed on a red tree produces no DMG rather than one nobody tested.
+# Publishing then waits on the `release` environment, so an admin approves
+# before anything reaches the Releases page. Configure that once under
+# Settings, Environments, release, Required reviewers. Without the environment
+# the publish job runs unapproved, which is worth knowing before the first tag.
+#
+# The app is signed ad hoc on the runner, with the same fixed identifier the
+# local build uses, and the DMG is not notarized: there is no Developer ID
+# behind this project. README.md tells people to clear the quarantine flag.
+#
+# The last job pushes the new version and checksum into the Homebrew tap at
+# lonkar-org/homebrew-tap, as Casks/notify.rb. The cask lives in this
+# repository under homebrew/ and is copied over, so one place holds the rules
+# about what the cask installs. It needs a secret named TAP_DEPLOY_KEY on this
+# repository: the private half of a write-enabled deploy key on the tap. The
+# workflow's own GITHUB_TOKEN cannot reach another repository, and a deploy key
+# is scoped to that one repository's contents and to nothing else.
+#
+#   ssh-keygen -t ed25519 -N '' -C notification-companion-release -f tap-key
+#   gh repo deploy-key add tap-key.pub --repo lonkar-org/homebrew-tap --allow-write \
+#     --title 'notification-companion release workflow'
+#   gh secret set TAP_DEPLOY_KEY --repo lonkar-org/notification-companion < tap-key
+#   rm tap-key tap-key.pub
+#
+# Without it the release still publishes and the job warns, so a missing key
+# costs a stale tap rather than a failed release.
+#
+# Each `uses:` is pinned to a commit SHA with its version in a trailing comment;
+# Dependabot moves them.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and publish, for example v0.1.0'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Tag, tests and lints
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      # A tag on a branch that never merged stops here, before anything builds.
+      - name: The tag is on main
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$TAG points at $(git rev-parse --short HEAD), which is not on main; merge it and tag main"
+            exit 1
+          fi
+          echo "$TAG is on main"
+
+      # One version for the app, the plugin and the cask, kept in plugin.json.
+      - name: The tag names the version in plugin.json
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version .claude-plugin/plugin.json)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::the tag is $TAG but .claude-plugin/plugin.json says $version; just release does both"
+            exit 1
+          fi
+          echo "plugin.json says $version and the tag is $TAG"
+
+      # The release notes open with this section, so a tag whose changelog was
+      # never cut from `## Unreleased` stops here rather than publishing a
+      # release that says nothing about what changed.
+      - name: The changelog has a section for the tag
+        run: ./scripts/changelog-section.sh "$TAG" > /dev/null
+
+      - run: ./scripts/check-review-marks.sh
+      - run: shellcheck -S style bin/notify bin/notify-claude scripts/*.sh homebrew/*.sh
+      - run: scripts/notify-claude-test.sh
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - run: npx --yes @anthropic-ai/claude-code@2.1.296 plugin validate --strict .
+
+  build:
+    name: Notify.app and the DMG
+    needs: gate
+    runs-on: macos-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - run: swiftc --version
+      - run: scripts/notify-app.sh dmg dist "$TAG"
+
+      # An app that cannot print its usage, or a DMG that does not verify, is
+      # not one worth publishing, and both are free here.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          dist/Notify.app/Contents/MacOS/Notify --help
+          codesign --verify --deep --strict dist/Notify.app
+          hdiutil verify dist/Notify-*.dmg
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' dist/Notify.app/Contents/Info.plist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Notify-dmg
+          path: |
+            dist/*.dmg
+            dist/checksums.txt
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    # An admin approves here. Everything above has already run, so the approval
+    # is a decision about publishing and not about whether it builds.
+    environment: release
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: Notify-dmg
+          path: assets
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=${TAG#v}
+          notes=$(mktemp)
+          {
+            ./scripts/changelog-section.sh --details "$TAG"
+            echo
+            echo "The whole history is in [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/$TAG/CHANGELOG.md)."
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo "brew tap lonkar-org/tap && brew install --cask --no-quarantine notify"
+            echo '```'
+            echo
+            echo "Or open \`Notify-$version.dmg\` below, drag Notify.app to Applications and clear the quarantine flag:"
+            echo "\`xattr -dr com.apple.quarantine /Applications/Notify.app\`. The app is signed ad hoc, not notarized."
+            echo
+            echo "In Claude Code: \`/plugin install notification-companion --marketplace lonkar-org/notification-companion\`."
+            echo
+            echo "## Checksum"
+            echo
+            echo '```'
+            cat assets/checksums.txt
+            echo '```'
+          } > "$notes"
+          gh release create "$TAG" assets/*.dmg assets/checksums.txt \
+            --repo "${{ github.repository }}" \
+            --title "$TAG" \
+            --notes-file "$notes"
+
+  tap:
+    name: Update the Homebrew tap
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      # A secret cannot be read in a job-level `if`, so the key is checked once
+      # here and every step after it reads this output.
+      - name: Is TAP_DEPLOY_KEY set
+        id: token
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${TAP_DEPLOY_KEY:-}" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::TAP_DEPLOY_KEY is not set, so lonkar-org/homebrew-tap still points at the previous version. Create the secret and rerun this job."
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.have == 'true'
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # `ssh-key` rather than `token`, so checkout clones over SSH and leaves
+      # the remote and the key configured for the push at the end of the job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.have == 'true'
+        with:
+          repository: lonkar-org/homebrew-tap
+          ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Fill in the cask
+        if: steps.token.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern checksums.txt --dir .
+          mkdir -p tap/Casks
+          cp homebrew/Casks/notify.rb tap/Casks/notify.rb
+          homebrew/update-cask.sh "$TAG" checksums.txt tap/Casks/notify.rb
+          git -C tap --no-pager diff
+
+      - name: Commit it
+        if: steps.token.outputs.have == 'true'
+        working-directory: tap
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/notify.rb
+          if git diff --cached --quiet; then
+            echo "the cask already points at $TAG"
+            exit 0
+          fi
+          git commit -m "notify ${TAG#v}" \
+            -m "From ${{ github.repository }} $TAG, checksum taken from the release."
+          git push
