@@ -215,6 +215,7 @@ The skill itself is only the acknowledgement line; the hooks don't need any help
 - `bin/snotify`: the command. `bin/snotify-claude`: the Claude Code hook. Both print their header comment as usage.
 - `skills/notify`: the `/notify` skill. `hooks/hooks.json` and `.claude-plugin/`: the plugin.
 - `scripts/snotify-app.sh`: build, dmg, install, status, test, uninstall. `scripts/snotify-app-test.sh`: the built app against a temporary state directory. `scripts/snotify-claude-test.sh`: the hook against fake transcripts. `scripts/snotify-demo.sh`: twenty demo notifications from four mocked senders, `just demo`.
+- `docs/`: design notes. `docs/sneeze.md` is the default sound, a tally that builds up to a sneeze, decided and not built yet.
 - `homebrew/`: the cask and the script that points it at a release; the release workflow copies them into [lonkar-org/homebrew-tap](https://github.com/lonkar-org/homebrew-tap).
 - `.github/workflows/`: `ci.yml` runs what `just ci` runs, `release.yml` builds the DMG on a `v*` tag and publishes after an approval, `markdown.yml` lints the Markdown.
 
