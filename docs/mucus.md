@@ -10,10 +10,14 @@ editor, another app. The integration point is as low as the CLI and if a
 socket, a pipe or an HTTP endpoint is ever added it's the same thing with a
 different door. There is no gate.
 
-So Snotify doesn't filter, doesn't throttle, doesn't dedupe and doesn't
-decide what's important. If something pushes too much you configured it
-that way and the fix is in the thing that pushes. The one switch a user
-gets is on or off for a sender. Nothing else.
+Snotify doesn't decide what's important and doesn't drop a post: every
+one is in the history. What it holds is a gate with a default opening, how
+many banners a sender gets on screen in a window, and the user owns the
+gate: wider, narrower, or shut for one sender. If something pushes too much
+the sender is named in the noise report and the fix is in the thing that
+pushes or in the user's one line. [congestion.md](congestion.md) has the
+opening and the reasons.
+<!-- @Yogesh(check): amended 2026-10-11 from "no gate, no throttle, the one switch is on or off"; this is the stance you set that day, in Claude's words -->
 
 ## Never polling
 
