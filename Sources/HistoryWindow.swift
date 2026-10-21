@@ -1,169 +1,209 @@
-// HistoryWindow.swift - the main window: a search field over every history
-// entry, a list of them, and the selected one rendered in full. Opened by a
-// double-click on Snotify.app, the menu bar item, `snotify show [QUERY]`, or
-// Cmd-Y, and it reloads when the history directory changes.
+// HistoryWindow.swift - the main window: a sidebar with the calendar, the
+// senders and the outcomes, the list of entries grouped by day, and the
+// selected one in full. Search is in the toolbar beside the actions. Opened
+// by a double-click on Snotify.app, the menu bar item, `snotify show [QUERY]`,
+// or Cmd-Y, and it reloads when the history directory changes.
 
 import AppKit
 
-final class HistoryWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+/// The table with Return and Delete, and a right click that selects first.
+final class HistoryTable: NSTableView {
+    var onReturn: (() -> Void)?
+    var onDelete: (() -> Void)?
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 36, 76: onReturn?()
+        case 51, 117: onDelete?()
+        default: super.keyDown(with: event)
+        }
+    }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let row = self.row(at: convert(event.locationInWindow, from: nil))
+        if row >= 0, delegate?.tableView?(self, shouldSelectRow: row) ?? true {
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        return super.menu(for: event)
+    }
+}
+
+final class HistoryWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSToolbarDelegate, NSMenuItemValidation {
     let window: NSWindow
-    private let search = NSSearchField()
-    private let table = NSTableView()
-    private let detail = NSTextView()
-    private let count = NSTextField(labelWithString: "")
-    private let run = NSButton(title: "Run Click Command", target: nil, action: nil)
-    private let reveal = NSButton(title: "Reveal in Finder", target: nil, action: nil)
-    private let copy = NSButton(title: "Copy", target: nil, action: nil)
+    private let split = NSSplitViewController()
+    private let sidebar = Sidebar()
+    private let table = HistoryTable()
+    private let detail = DetailView()
+    private var search: NSSearchField?
+    private var toolbarItems: [NSToolbarItem.Identifier: NSToolbarItem] = [:]
     private var all: [HistoryEntry] = []
     private var shown: [HistoryEntry] = []
+    private enum Row { case day(String, Int), entry(HistoryEntry) }
+    private var rows: [Row] = []
+    private var filter = HistoryFilter()
+    private var current: HistoryEntry?
     private var watcher: DispatchSourceFileSystemObject?
     private var reloadPending = false
     var onClose: (() -> Void)?
 
+    private static let run = NSToolbarItem.Identifier("run")
+    private static let reveal = NSToolbarItem.Identifier("reveal")
+    private static let copy = NSToolbarItem.Identifier("copy")
+    private static let trash = NSToolbarItem.Identifier("trash")
+    private static let search = NSToolbarItem.Identifier("search")
+    private static let splitAutosave = "SnotifyHistorySplit"
+
     override init() {
-        let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
-        window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .miniaturizable],
+        let frame = NSRect(x: 0, y: 0, width: 1120, height: 680)
+        window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         super.init()
-        window.title = "Snotify History"
+        window.title = "Snotify"
         window.delegate = self
-        window.minSize = NSSize(width: 600, height: 320)
-        window.setFrameAutosaveName("NotifyHistory")
+        window.minSize = NSSize(width: 860, height: 480)
+        window.toolbarStyle = .unified
+        window.titlebarSeparatorStyle = .automatic
 
-        search.placeholderString = "Search title, body, sender, from:claude, process:bash…"
-        search.delegate = self
-        search.target = self
-        search.action = #selector(filter)
-        search.sendsSearchStringImmediately = true
-        search.setAccessibilityLabel("Search history")
-        search.translatesAutoresizingMaskIntoConstraints = false
+        // sidebar
+        let side = NSViewController()
+        side.view = sidebar
+        let sideItem = NSSplitViewItem(sidebarWithViewController: side)
+        sideItem.minimumThickness = 248
+        sideItem.maximumThickness = 320
+        sideItem.canCollapse = true
+        sidebar.onDays = { [weak self] d in self?.filter.days = d; self?.apply() }
+        sidebar.onSender = { [weak self] s in self?.filter.sender = s; self?.apply() }
+        sidebar.onShow = { [weak self] s in self?.filter.show = s; self?.apply() }
 
-        count.font = NSFont.systemFont(ofSize: 11)
-        count.textColor = .secondaryLabelColor
-        count.alignment = .right
-        count.translatesAutoresizingMaskIntoConstraints = false
-
-        for (id, title, width) in [("icon", "", 28), ("time", "When", 112), ("from", "From", 110), ("title", "Title", 200)] {
-            let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-            col.title = title
-            col.width = CGFloat(width)
-            col.minWidth = id == "icon" ? 28 : 60
-            if id == "icon" { col.maxWidth = 28 }
-            table.addTableColumn(col)
-        }
+        // list
+        let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("entry"))
+        col.resizingMask = .autoresizingMask
+        table.addTableColumn(col)
+        table.headerView = nil
         table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        table.style = .inset
+        table.floatsGroupRows = true
+        table.intercellSpacing = NSSize(width: 0, height: 2)
         table.dataSource = self
         table.delegate = self
-        table.usesAlternatingRowBackgroundColors = true
         table.allowsMultipleSelection = false
-        table.rowHeight = 22
+        table.allowsEmptySelection = true
         table.setAccessibilityLabel("Notifications")
         table.doubleAction = #selector(runClick)
         table.target = self
+        table.onReturn = { [weak self] in self?.runClick() }
+        table.onDelete = { [weak self] in self?.trashEntry() }
+        let menu = NSMenu()
+        for (title, sel, key) in [("Run Click Command", #selector(runClick), "\r"), ("Open Info Window", #selector(openInfo), "i"),
+                                  ("Reveal in Finder", #selector(revealFile), "r"), ("Copy as Markdown", #selector(copyAll), ""),
+                                  ("Copy Click Command", #selector(copyCommand), ""), ("Move to Trash", #selector(trashEntry), "")] {
+            if title.hasPrefix("Reveal") || title.hasPrefix("Move") { menu.addItem(.separator()) }
+            let mi = menu.addItem(withTitle: title, action: sel, keyEquivalent: key)
+            mi.target = self
+            mi.keyEquivalentModifierMask = []
+        }
+        table.menu = menu
         let list = NSScrollView()
         list.documentView = table
         list.hasVerticalScroller = true
         list.borderType = .noBorder
-        list.translatesAutoresizingMaskIntoConstraints = false
+        let listVC = NSViewController()
+        listVC.view = list
+        let listItem = NSSplitViewItem(contentListWithViewController: listVC)
+        listItem.minimumThickness = 320
+        listItem.maximumThickness = 520
 
-        detail.isEditable = false
-        detail.isSelectable = true
-        detail.isRichText = true
-        detail.drawsBackground = false
-        detail.textContainerInset = NSSize(width: 14, height: 12)
-        detail.isAutomaticLinkDetectionEnabled = true
-        detail.linkTextAttributes = [.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue]
-        detail.autoresizingMask = [.width]
-        detail.isVerticallyResizable = true
-        detail.isHorizontallyResizable = false
-        detail.textContainer?.widthTracksTextView = true
-        detail.setAccessibilityLabel("Selected notification")
-        let text = NSScrollView()
-        text.documentView = detail
-        text.hasVerticalScroller = true
-        text.borderType = .noBorder
-        text.translatesAutoresizingMaskIntoConstraints = false
+        // detail
+        let detailVC = NSViewController()
+        detailVC.view = detail
+        let detailItem = NSSplitViewItem(viewController: detailVC)
+        detailItem.minimumThickness = 380
+        detail.onRun = { [weak self] in self?.runClick() }
+        detail.onOpenInfo = { [weak self] in self?.openInfo() }
 
-        let split = NSSplitView()
-        split.isVertical = true
-        split.dividerStyle = .thin
-        split.addArrangedSubview(list)
-        split.addArrangedSubview(text)
-        split.setHoldingPriority(.defaultLow + 1, forSubviewAt: 0)
-        split.translatesAutoresizingMaskIntoConstraints = false
+        split.splitView.dividerStyle = .thin
+        split.addSplitViewItem(sideItem)
+        split.addSplitViewItem(listItem)
+        split.addSplitViewItem(detailItem)
+        split.splitView.autosaveName = HistoryWindow.splitAutosave
+        window.contentViewController = split
+        window.setContentSize(frame.size)
 
-        for (b, sel, label) in [(run, #selector(runClick), "Run the command the click would have run"),
-                                (reveal, #selector(revealFile), "Reveal the Markdown file in Finder"),
-                                (copy, #selector(copyAll), "Copy the whole entry as Markdown")] {
-            b.target = self
-            b.action = sel
-            b.bezelStyle = .rounded
-            b.isEnabled = false
-            b.setAccessibilityLabel(label)
-            b.translatesAutoresizingMaskIntoConstraints = false
+        let toolbar = NSToolbar(identifier: "SnotifyHistory")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+
+        if !window.setFrameUsingName("NotifyHistory") { window.center() }
+        window.setFrameAutosaveName("NotifyHistory")
+        if UserDefaults.standard.object(forKey: "NSSplitView Subview Frames " + HistoryWindow.splitAutosave) == nil {
+            DispatchQueue.main.async { [split] in
+                split.splitView.setPosition(264, ofDividerAt: 0)
+                split.splitView.setPosition(264 + 400, ofDividerAt: 1)
+            }
         }
-        let close = NSButton(title: "Close", target: window, action: #selector(NSWindow.performClose(_:)))
-        close.bezelStyle = .rounded
-        close.keyEquivalent = "\u{1b}"
-        close.translatesAutoresizingMaskIntoConstraints = false
-
-        let content = NSView(frame: frame)
-        for v in [search, count, split, run, reveal, copy, close] { content.addSubview(v) }
-        NSLayoutConstraint.activate([
-            search.topAnchor.constraint(equalTo: content.topAnchor, constant: 10),
-            search.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
-            search.trailingAnchor.constraint(equalTo: count.leadingAnchor, constant: -10),
-            count.centerYAnchor.constraint(equalTo: search.centerYAnchor),
-            count.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
-            count.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
-            split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10),
-            split.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            split.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            split.bottomAnchor.constraint(equalTo: run.topAnchor, constant: -8),
-            run.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
-            run.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
-            reveal.leadingAnchor.constraint(equalTo: run.trailingAnchor, constant: 8),
-            reveal.bottomAnchor.constraint(equalTo: run.bottomAnchor),
-            copy.leadingAnchor.constraint(equalTo: reveal.trailingAnchor, constant: 8),
-            copy.bottomAnchor.constraint(equalTo: run.bottomAnchor),
-            close.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
-            close.bottomAnchor.constraint(equalTo: run.bottomAnchor),
-        ])
-        window.contentView = content
-        window.center()
-        window.initialFirstResponder = search
-        DispatchQueue.main.async { split.setPosition(470, ofDividerAt: 0) }
         reload()
         watch()
     }
 
     func show(query: String?) {
-        if let q = query { search.stringValue = q; filter() }
+        if let q = query, let s = search { s.stringValue = q; filter.query = q; apply() }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(search)
+        if (query ?? "").isEmpty { window.makeFirstResponder(table) } else { focusSearch() }
     }
 
-    func focusSearch() { window.makeFirstResponder(search) }
+    func focusSearch() { if let s = search { window.makeFirstResponder(s) } }
 
-    // The window drawn by itself, for checking the rendering from a script.
-    // No screen capture is involved, so no Screen Recording permission.
+    /// The window drawn by itself, toolbar included, for checking the
+    /// rendering from a script. No screen capture, so no permission. Drawn
+    /// in three parts: the vibrancy view under the sidebar renders nothing
+    /// offscreen, so the sidebar goes on top of the content, then the
+    /// titlebar with the toolbar on top of both.
     func snapshot(to path: String) {
-        guard let view = window.contentView,
-              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { fail("cannot render", code: 1) }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { fail("cannot encode", code: 1) }
+        guard let content = window.contentView else { fail("cannot render", code: 1) }
+        // Through PNG and back: a vibrant view's cached bitmap draws inverted
+        // when composited directly, and encodes correctly.
+        func part(_ view: NSView) -> NSImage? {
+            guard !view.isHidden, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            return rep.representation(using: .png, properties: [:]).flatMap { NSImage(data: $0) }
+        }
+        func place(_ view: NSView) -> NSRect {
+            var r = content.convert(view.bounds, from: view)
+            if content.isFlipped { r.origin.y = content.bounds.height - r.maxY }
+            return r
+        }
+        let image = NSImage(size: content.bounds.size)
+        image.lockFocus()
+        window.effectiveAppearance.performAsCurrentDrawingAppearance {
+            part(content)?.draw(in: content.bounds)
+            // the sidebar floats inside a margin that renders black offscreen too
+            let column = place(sidebar)
+            NSColor.windowBackgroundColor.setFill()
+            NSRect(x: 0, y: 0, width: column.maxX + column.minX, height: content.bounds.height).fill()
+            part(sidebar)?.draw(in: column)
+            if let titlebar = window.standardWindowButton(.closeButton)?.superview?.superview {
+                part(titlebar)?.draw(in: place(titlebar))
+            }
+        }
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { fail("cannot encode", code: 1) }
         do { try png.write(to: URL(fileURLWithPath: path)) }
         catch { fail("cannot write \(path): \(error.localizedDescription)", code: 1) }
     }
 
+    /// Select one entry, clearing whatever filter hides it.
     func select(path: String) {
-        if let i = shown.firstIndex(where: { $0.path == path }) {
+        if let i = rows.firstIndex(where: { if case .entry(let e) = $0 { return e.path == path } else { return false } }) {
             table.selectRowIndexes(IndexSet(integer: i), byExtendingSelection: false)
             table.scrollRowToVisible(i)
-        } else if !search.stringValue.isEmpty {
-            search.stringValue = ""
-            filter()
+        } else if filter.query.isEmpty, filter.days == nil, filter.sender == nil, filter.show == .everything {
+            return
+        } else {
+            search?.stringValue = ""
+            filter = HistoryFilter()
+            sidebar.select(days: nil)
             select(path: path)
         }
     }
@@ -171,21 +211,104 @@ final class HistoryWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NS
     // MARK: data
 
     func reload() {
-        let selected = table.selectedRow >= 0 && table.selectedRow < shown.count ? shown[table.selectedRow].path : nil
         all = HistoryEntry.all()
-        filter()
-        if let p = selected { select(path: p) }
+        apply()
     }
 
-    @objc func filter() {
-        let q = search.stringValue
-        shown = q.isEmpty ? all : all.filter { $0.matches(q) }
+    private static let dayName: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("EEEE d MMMM")
+        return f
+    }()
+    private static let dayNameYear: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("EEEE d MMMM yyyy")
+        return f
+    }()
+
+    private func dayLabel(_ d: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return "Today" }
+        if cal.isDateInYesterday(d) { return "Yesterday" }
+        return (cal.component(.year, from: d) == cal.component(.year, from: Date()) ? HistoryWindow.dayName : HistoryWindow.dayNameYear).string(from: d)
+    }
+
+    /// Filter, regroup, recount the facets, keep the selection if it survived.
+    private func apply() {
+        let selected = current?.path
+        shown = all.filter { filter.matches($0) }
+        rows = []
+        var lastDay: Date? = nil
+        var counts: [Date: Int] = [:]
+        for e in shown { if let d = e.day { counts[d, default: 0] += 1 } }
+        for e in shown {
+            let d = e.day ?? .distantPast
+            if d != lastDay {
+                rows.append(.day(e.day.map(dayLabel) ?? "Undated", counts[d] ?? 0))
+                lastDay = d
+            }
+            rows.append(.entry(e))
+        }
         table.reloadData()
-        count.stringValue = shown.count == all.count ? "\(all.count)" : "\(shown.count) of \(all.count)"
-        if shown.isEmpty { render(nil) } else if table.selectedRow < 0 { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+
+        // the calendar counts what the other filters leave, and so on round
+        var byDay: [Date: Int] = [:]
+        for e in all where filter.matchesQuery(e) && filter.matchesSender(e) && filter.show.matches(e) {
+            if let d = e.day { byDay[d, default: 0] += 1 }
+        }
+        sidebar.calendar.counts = byDay
+        var bySender: [String: Sidebar.SenderFacet] = [:]
+        var total = 0
+        for e in all where filter.matchesQuery(e) && filter.matchesDays(e) && filter.show.matches(e) {
+            total += 1
+            if var f = bySender[e.sender] {
+                f.count += 1
+                if f.sample.iconSpec == nil, e.iconSpec != nil { f.sample = e }
+                bySender[e.sender] = f
+            } else {
+                bySender[e.sender] = Sidebar.SenderFacet(name: e.sender, sample: e, count: 1)
+            }
+        }
+        if let s = filter.sender, bySender[s] == nil, let sample = all.first(where: { $0.sender == s }) {
+            bySender[s] = Sidebar.SenderFacet(name: s, sample: sample, count: 0)
+        }
+        sidebar.setSenders(bySender.values.sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }, total: total, selected: filter.sender)
+        var byShow: [HistoryFilter.Show: Int] = [:]
+        for e in all where filter.matchesQuery(e) && filter.matchesDays(e) && filter.matchesSender(e) {
+            for s in HistoryFilter.Show.allCases where s.matches(e) { byShow[s, default: 0] += 1 }
+        }
+        sidebar.setShows(byShow, selected: filter.show)
+
+        var subtitle = shown.count == all.count ? "\(all.count) notification\(all.count == 1 ? "" : "s")" : "\(shown.count) of \(all.count)"
+        if let d = filter.days { subtitle += "  ·  " + sidebar.calendar.describe(d) }
+        if let s = filter.sender { subtitle += "  ·  " + s }
+        if filter.show != .everything { subtitle += "  ·  " + filter.show.label.lowercased() }
+        window.subtitle = subtitle
+
+        if let p = selected, let i = rows.firstIndex(where: { if case .entry(let e) = $0 { return e.path == p } else { return false } }) {
+            table.selectRowIndexes(IndexSet(integer: i), byExtendingSelection: false)
+        } else if let i = rows.firstIndex(where: { if case .entry = $0 { return true } else { return false } }) {
+            table.selectRowIndexes(IndexSet(integer: i), byExtendingSelection: false)
+            table.scrollRowToVisible(0)
+        } else {
+            render(nil)
+        }
     }
 
-    func controlTextDidChange(_ obj: Notification) { filter() }
+    func controlTextDidChange(_ obj: Notification) {
+        filter.query = search?.stringValue ?? ""
+        apply()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        // Down from the search field goes to the list; Escape clears, then leaves.
+        if sel == #selector(NSResponder.moveDown(_:)) { window.makeFirstResponder(table); return true }
+        if sel == #selector(NSResponder.cancelOperation(_:)) {
+            if !(search?.stringValue ?? "").isEmpty { search?.stringValue = ""; filter.query = ""; apply() } else { window.makeFirstResponder(table) }
+            return true
+        }
+        return false
+    }
 
     /// A vnode watch on the directory, so a banner posted while the window is
     /// open shows up without a reload; coalesced, since a post writes twice.
@@ -207,91 +330,100 @@ final class HistoryWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NS
         watcher = source
     }
 
+    // MARK: toolbar
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.toggleSidebar, .sidebarTrackingSeparator, HistoryWindow.run, HistoryWindow.reveal, HistoryWindow.copy, HistoryWindow.trash, .flexibleSpace, HistoryWindow.search]
+    }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if id == HistoryWindow.search {
+            let item = NSSearchToolbarItem(itemIdentifier: id)
+            item.searchField.placeholderString = "Search, or from:claude, process:bash"
+            item.searchField.delegate = self
+            item.searchField.sendsSearchStringImmediately = true
+            item.searchField.setAccessibilityLabel("Search history")
+            item.preferredWidthForSearchField = 300
+            search = item.searchField
+            return item
+        }
+        let spec: [NSToolbarItem.Identifier: (String, String, Selector, String)] = [
+            HistoryWindow.run: ("play.fill", "Run", #selector(runClick), "Run the command the click would have run (Return)"),
+            HistoryWindow.reveal: ("folder", "Reveal", #selector(revealFile), "Reveal the Markdown file in Finder"),
+            HistoryWindow.copy: ("doc.on.doc", "Copy", #selector(copyAll), "Copy the whole entry as Markdown"),
+            HistoryWindow.trash: ("trash", "Trash", #selector(trashEntry), "Move the entry's file to the Trash (Delete)"),
+        ]
+        guard let (symbol, title, sel, tip) = spec[id] else { return nil }
+        let item = NSToolbarItem(itemIdentifier: id)
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        item.label = title
+        item.paletteLabel = title
+        item.toolTip = tip
+        item.target = self
+        item.action = sel
+        item.isBordered = true
+        item.autovalidates = false
+        item.isEnabled = false
+        toolbarItems[id] = item
+        return item
+    }
+
     // MARK: table
 
-    func numberOfRows(in tableView: NSTableView) -> Int { shown.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+
+    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
+        if case .day = rows[row] { return true } else { return false }
+    }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        if case .entry = rows[row] { return true } else { return false }
+    }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if case .day = rows[row] { return 26 } else { return 58 }
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let col = tableColumn, row < shown.count else { return nil }
-        let e = shown[row]
-        let id = col.identifier.rawValue
-        if id == "icon" {
-            let cell = tableView.makeView(withIdentifier: col.identifier, owner: self) as? NSTableCellView ?? {
-                let c = NSTableCellView()
-                c.identifier = col.identifier
-                let iv = NSImageView()
-                iv.translatesAutoresizingMaskIntoConstraints = false
-                c.addSubview(iv)
-                c.imageView = iv
-                NSLayoutConstraint.activate([
-                    iv.centerXAnchor.constraint(equalTo: c.centerXAnchor),
-                    iv.centerYAnchor.constraint(equalTo: c.centerYAnchor),
-                    iv.widthAnchor.constraint(equalToConstant: 18),
-                    iv.heightAnchor.constraint(equalToConstant: 18),
-                ])
-                return c
-            }()
-            if let spec = e["icon"], let icon = IconSpec(spec) {
-                let color = e["color"].flatMap(parseColor) ?? .labelColor
-                cell.imageView?.image = iconImage(icon, color: color, pixels: 36)
-                cell.imageView?.setAccessibilityLabel(spec)
-            } else {
-                cell.imageView?.image = nil
-            }
+        switch rows[row] {
+        case .day(let name, let n):
+            let cell = tableView.makeView(withIdentifier: DayHeaderView.identifier, owner: self) as? DayHeaderView ?? DayHeaderView()
+            cell.set(name, count: n)
+            return cell
+        case .entry(let e):
+            let cell = tableView.makeView(withIdentifier: EntryRowView.identifier, owner: self) as? EntryRowView ?? EntryRowView()
+            cell.set(e)
             return cell
         }
-        let cell = tableView.makeView(withIdentifier: col.identifier, owner: self) as? NSTableCellView ?? {
-            let c = NSTableCellView()
-            c.identifier = col.identifier
-            let tf = NSTextField(labelWithString: "")
-            tf.lineBreakMode = .byTruncatingTail
-            tf.translatesAutoresizingMaskIntoConstraints = false
-            c.addSubview(tf)
-            c.textField = tf
-            NSLayoutConstraint.activate([
-                tf.leadingAnchor.constraint(equalTo: c.leadingAnchor, constant: 2),
-                tf.trailingAnchor.constraint(equalTo: c.trailingAnchor, constant: -2),
-                tf.centerYAnchor.constraint(equalTo: c.centerYAnchor),
-            ])
-            return c
-        }()
-        switch id {
-        case "time":
-            cell.textField?.stringValue = e.time.map { HistoryEntry.shown.string(from: $0) } ?? ""
-            cell.textField?.textColor = .secondaryLabelColor
-        case "from":
-            cell.textField?.stringValue = e.sender
-        default:
-            let body = e["body"] ?? ""
-            cell.textField?.stringValue = body.isEmpty ? e.title : e.title + "  —  " + body.replacingOccurrences(of: "\n", with: " ")
-            cell.textField?.toolTip = body
-        }
-        return cell
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         let row = table.selectedRow
-        render(row >= 0 && row < shown.count ? shown[row] : nil)
+        if row >= 0, case .entry(let e) = rows[row] { render(e) } else { render(nil) }
     }
-
-    private var current: HistoryEntry?
 
     private func render(_ e: HistoryEntry?) {
         current = e
-        guard let e = e else {
-            detail.textStorage?.setAttributedString(NSAttributedString(string: all.isEmpty ? "Nothing has been posted yet." : "No match.",
-                attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
-            run.isEnabled = false; reveal.isEnabled = false; copy.isEnabled = false
-            return
-        }
-        detail.textStorage?.setAttributedString(styled(markdown: e.markdown))
-        detail.scroll(.zero)
-        run.isEnabled = !(e["on_click"] ?? "").isEmpty
-        reveal.isEnabled = true
-        copy.isEnabled = true
+        let placeholder = all.isEmpty ? "Nothing has been posted yet." : shown.isEmpty ? "No match." : "Select a notification."
+        detail.render(e, placeholder: placeholder)
+        let hasCommand = !(e?["on_click"] ?? "").isEmpty
+        toolbarItems[HistoryWindow.run]?.isEnabled = hasCommand
+        toolbarItems[HistoryWindow.reveal]?.isEnabled = e != nil
+        toolbarItems[HistoryWindow.copy]?.isEnabled = e != nil
+        toolbarItems[HistoryWindow.trash]?.isEnabled = e != nil
     }
 
     // MARK: actions
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(runClick), #selector(copyCommand): return !(current?["on_click"] ?? "").isEmpty
+        case #selector(openInfo): return current?.hasInfo ?? false
+        case #selector(revealFile), #selector(copyAll), #selector(trashEntry): return current != nil
+        default: return true
+        }
+    }
 
     @objc func runClick() {
         guard let e = current, let command = e["on_click"], !command.isEmpty else { return }
@@ -308,6 +440,11 @@ final class HistoryWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NS
         do { try p.run() } catch { NSLog("Snotify: on-click failed: %@", error.localizedDescription) }
     }
 
+    @objc func openInfo() {
+        guard let e = current, e.hasInfo, let app = NSApp.delegate as? Delegate else { return }
+        app.openInfo(title: e.title.isEmpty ? e.name : e.title, path: e.path, record: false)
+    }
+
     @objc func revealFile() {
         guard let e = current else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: e.path)])
@@ -319,6 +456,34 @@ final class HistoryWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NS
         pb.clearContents()
         pb.setString(e.render(), forType: .string)
     }
+
+    @objc func copyCommand() {
+        guard let c = current?["on_click"], !c.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(c, forType: .string)
+    }
+
+    /// To the Trash, so a slip is undone from Finder; the watcher reloads.
+    @objc func trashEntry() {
+        guard let e = current else { return }
+        let row = table.selectedRow
+        NSWorkspace.shared.recycle([URL(fileURLWithPath: e.path)]) { [weak self] _, error in
+            if let error = error { NSLog("Snotify: cannot trash %@: %@", e.path, error.localizedDescription); return }
+            guard let self = self else { return }
+            self.current = nil
+            self.reload()
+            let next = min(row, self.rows.count - 1)
+            if next >= 0, case .entry = self.rows[next] {
+                self.table.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
+            }
+        }
+    }
+
+    @objc func showToday() { sidebar.select(days: sidebar.calendar.days(Calendar.current.startOfDay(for: Date()), Calendar.current.startOfDay(for: Date()))) }
+    @objc func showAllDays() { sidebar.select(days: nil) }
+    @objc func previousMonth() { sidebar.stepMonth(-1) }
+    @objc func nextMonth() { sidebar.stepMonth(1) }
 
     func windowWillClose(_ notification: Notification) {
         watcher?.cancel()

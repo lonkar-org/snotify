@@ -30,8 +30,9 @@ usage: snotify --title TITLE [--body BODY] [--subtitle TEXT] [--sound NAME|defau
               [--info-file PATH.md | --info-md 'markdown']
               [--from LABEL] [--icon GLYPH] [--color COLOR] [--meta KEY=VALUE]...
        snotify history [QUERY...] [--since 7d|2026-10-01] [--limit N] [--json | --paths]
-       snotify show [QUERY...] [--snapshot OUT.png]
-                                           open the history window; --snapshot writes it to a PNG and exits
+       snotify show [QUERY...] [--snapshot OUT.png] [--dark]
+                                           open the history window; --snapshot writes it to a PNG and exits,
+                                           --dark in dark mode
        snotify config [KEY [VALUE]]         menubar, dock, login: on|off; retention: DAYS|forever
        snotify icons [QUERY] [--png OUT.png [--color COLOR]]
                                            search the glyph names; --png renders the first match
@@ -79,6 +80,7 @@ struct Options {
     var configKey: String?
     var configValue: String?
     var png: String?
+    var dark = false
 }
 
 func fail(_ message: String, code: Int32) -> Never {
@@ -132,6 +134,7 @@ func parse(_ args: [String]) -> Options {
         case "--json": o.json = true
         case "--paths": o.paths = true
         case "--png": o.png = value(a)
+        case "--dark": o.dark = true
         case "-h", "--help": print(usage); exit(0)
         default:
             if a.hasPrefix("-") { fail("unknown argument \(a)\n" + usage, code: 2) }
@@ -164,6 +167,30 @@ func installMenu(_ delegate: Delegate) {
     history.target = delegate
     fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
     fileItem.submenu = fileMenu
+    // The entry actions and the calendar, reached through the responder chain,
+    // where the history window sits as its window's delegate.
+    let entryItem = NSMenuItem(); main.addItem(entryItem)
+    let entryMenu = NSMenu(title: "Entry")
+    entryMenu.addItem(withTitle: "Run Click Command", action: #selector(HistoryWindow.runClick), keyEquivalent: "\r")
+    entryMenu.addItem(withTitle: "Open Info Window", action: #selector(HistoryWindow.openInfo), keyEquivalent: "i")
+    entryMenu.addItem(withTitle: "Reveal in Finder", action: #selector(HistoryWindow.revealFile), keyEquivalent: "r")
+    entryMenu.addItem(withTitle: "Copy as Markdown", action: #selector(HistoryWindow.copyAll), keyEquivalent: "C")
+    entryMenu.addItem(withTitle: "Copy Click Command", action: #selector(HistoryWindow.copyCommand), keyEquivalent: "")
+    entryMenu.addItem(.separator())
+    let trash = entryMenu.addItem(withTitle: "Move to Trash", action: #selector(HistoryWindow.trashEntry), keyEquivalent: "\u{8}")
+    trash.keyEquivalentModifierMask = [.command]
+    entryItem.submenu = entryMenu
+    let viewItem = NSMenuItem(); main.addItem(viewItem)
+    let viewMenu = NSMenu(title: "View")
+    viewMenu.addItem(withTitle: "Today", action: #selector(HistoryWindow.showToday), keyEquivalent: "t")
+    viewMenu.addItem(withTitle: "All Days", action: #selector(HistoryWindow.showAllDays), keyEquivalent: "0")
+    let prev = viewMenu.addItem(withTitle: "Previous Month", action: #selector(HistoryWindow.previousMonth), keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!))
+    prev.keyEquivalentModifierMask = [.command, .option]
+    let next = viewMenu.addItem(withTitle: "Next Month", action: #selector(HistoryWindow.nextMonth), keyEquivalent: String(UnicodeScalar(NSRightArrowFunctionKey)!))
+    next.keyEquivalentModifierMask = [.command, .option]
+    viewMenu.addItem(.separator())
+    viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s").keyEquivalentModifierMask = [.command, .control]
+    viewItem.submenu = viewMenu
     let editItem = NSMenuItem(); main.addItem(editItem)
     let editMenu = NSMenu(title: "Edit")
     editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
@@ -220,6 +247,7 @@ final class Delegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
                 return
             }
             becomeResident(launched: false)
+            if o.dark { NSApp.appearance = NSAppearance(named: .darkAqua) }
             openHistory(query: q)
             if let out = o.snapshot {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in

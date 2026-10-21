@@ -36,6 +36,15 @@ test-app dir="dist":
 demo *args:
     {{scripts}}/snotify-demo.sh {{args}}
 
+# just preview out.png [--dark] [QUERY...]
+# Build from Sources/ and render the history window over a synthesised history to a PNG
+preview out *args:
+    {{scripts}}/snotify-preview.sh {{out}} {{args}}
+
+# Make macOS show the app's current icon on banners: drop the icon caches, restart the daemons, post one
+refresh-icon:
+    {{scripts}}/refresh-icon.sh
+
 # Re-vendor Resources/nerd-fonts from the pinned Nerd Fonts release (`VERSION` to move it)
 fetch-nerd-font version="":
     {{scripts}}/fetch-nerd-font.sh {{version}}

@@ -60,12 +60,27 @@ Homebrew formula; `just release X.Y.Z` cuts the next section from Unreleased.
 - `snotify history [QUERY] [--since 7d] [--limit N] [--json | --paths]`
   searches it from a shell, every word matching anywhere or `key:text`
   matching one field (`from:claude`, `process:backup.sh`, `project:myrepo`).
-- The history window: a search field, the list with each sender's glyph, the
-  selected entry in full with Run Click Command, Reveal in Finder and Copy.
-  Opened by a double-click on Snotify.app or Spotlight, Cmd-Y, the menu bar
-  item, or `snotify show [QUERY]`, which hands the query to the instance
-  already running when there is one. `--snapshot OUT.png` renders it to a
-  file without a screen capture.
+- The history window, three panes. A sidebar with a calendar, a dot under
+  every day something was posted, a day or a range selected by click, drag
+  or shift-click, and All, Today, 7 days, 30 days under it; then every
+  sender with its glyph and count and the outcomes, clicked, Info opened,
+  replaced, failed, each counted against the other filters. The list grouped
+  by day, each row the glyph, title, time, sender and body with marks for
+  Info text, a click, an opened Info, a replacement or a failure. The entry
+  in full: the outcomes as pills, the click command with Run, the Info
+  Markdown with Open, the frontmatter in cards. Search in the toolbar beside
+  Run, Reveal in Finder, Copy as Markdown and Move to Trash, which are also
+  the Entry menu and the row's context menu; Return runs the click, Delete
+  trashes, Cmd-T is today, Cmd-0 every day, Option-Cmd-Left and Right turn
+  the month. Opened by a double-click on Snotify.app or Spotlight, Cmd-Y,
+  the menu bar item, or `snotify show [QUERY]`, which hands the query to the
+  instance already running when there is one. `--snapshot OUT.png` renders
+  it to a file without a screen capture, `--dark` in dark mode, and
+  `just preview out.png` does that over a synthesised history.
+- `just refresh-icon`: macOS keeps showing the first icon it saw for the
+  bundle id on banners, whatever the installed app carries; this drops the
+  user's icon caches and dead LaunchServices registrations, restarts the
+  daemons and posts a banner to check.
 - A sender's glyph and colour: `--icon fa-rocket --color orange` names one of
   the 10,996 Nerd Fonts glyphs (Symbols Nerd Font Mono v3.5.1 travels in the
   bundle, MIT), `--icon sf:checkmark.seal.fill` an SF Symbol, `U+F135` a

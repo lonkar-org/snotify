@@ -24,7 +24,7 @@ trap 'rm -rf "$t"' EXIT
 
 # mock NAME: a script that forwards to notify, so the kernel-side sender is NAME
 mock() {
-  printf '#!/usr/bin/env bash\nnotify "$@"\n' > "$t/$1"
+  printf '#!/usr/bin/env bash\nsnotify "$@"\n' > "$t/$1"
   chmod +x "$t/$1"
 }
 mock backup.sh
