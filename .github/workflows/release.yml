@@ -96,7 +96,7 @@ jobs:
       - run: ./scripts/check-review-marks.sh
       - run: shellcheck -S style bin/snotify bin/snotify-claude scripts/*.sh homebrew/*.sh
       - run: scripts/snotify-claude-test.sh
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: npx --yes @anthropic-ai/claude-code@2.1.296 plugin validate --strict .
@@ -132,7 +132,7 @@ jobs:
       - run: scripts/formula-test.sh "dist/snotify-${TAG#v}.tar.gz"
       - run: brew style homebrew/Formula/snotify.rb
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: snotify-tarball
           path: |
@@ -156,7 +156,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: snotify-tarball
           path: assets
